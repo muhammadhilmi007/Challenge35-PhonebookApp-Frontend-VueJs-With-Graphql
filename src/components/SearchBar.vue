@@ -47,7 +47,7 @@ export default {
       default: ''
     }
   },
-  emits: ['update:value'],
+  emits: ['update:value', 'add'],
   setup(props, { emit }) {
     const contactStore = useContactStore();
     const sortOrder = computed(() => contactStore.sortOrder);

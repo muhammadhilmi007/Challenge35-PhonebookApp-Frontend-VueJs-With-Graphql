@@ -10,7 +10,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useContactStore } from '../stores/contacts';
 import ContactList from "@/components/ContactList.vue";

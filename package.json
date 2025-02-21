@@ -19,6 +19,7 @@
     "axios": "^1.7.9",
     "bootstrap": "^5.3.3",
     "bootstrap-icons": "^1.11.3",
+    "lodash-es": "^4.17.21",
     "pinia": "^3.0.1",
     "vue": "^3.5.13",
     "vue-icons-plus": "^0.1.8",

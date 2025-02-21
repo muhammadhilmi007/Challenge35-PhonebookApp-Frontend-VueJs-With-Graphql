@@ -59,7 +59,8 @@ import { useRouter } from 'vue-router';
 
 export default {
   props: ['contact'],
-  setup(props) {
+  emits: ['contact-updated'],
+  setup(props, { emit }) {
     const router = useRouter();
     const contactStore = useContactStore();
     const isEditing = ref(false);
@@ -68,11 +69,9 @@ export default {
 
     const saveChanges = async () => {
       if (!form.value.name.trim() || !form.value.phone.trim()) return;
-      // Changed editContact to updateContact to match the store method
       try {
         const updatedContact = await contactStore.updateContact(props.contact.id, { ...form.value });
         isEditing.value = false;
-        // Emit event to parent with updated contact data
         emit('contact-updated', updatedContact);
       } catch (err) {
         console.error('Failed to update contact:', err);
