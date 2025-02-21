@@ -2,15 +2,16 @@
   <div class="contact-card">
     <div class="card-content">
       <!-- Avatar Section -->
-      <div class="avatar" @click="onAvatarUpdate(contact.id)" role="button" aria-label="Update avatar">
-        <img :src="contact.photo || '/user-avatar.svg'" :alt="`${contact.name}'s avatar`" />
+      <div class="avatar" @click="handleAvatarClick" role="button" aria-label="Update avatar">
+        <img :src="contact.photo || '/default-avatar.svg'" :alt="`${contact.name}'s avatar`" />
       </div>
 
       <!-- Contact Information -->
       <div class="contact-info">
         <div v-if="isEditing" class="edit-form">
           <input v-model="form.name" type="text" placeholder="Name" class="edit-input" aria-label="Edit contact name" />
-          <input v-model="form.phone" type="tel" placeholder="Phone" class="edit-input" aria-label="Edit contact phone" />
+          <input v-model="form.phone" type="tel" placeholder="Phone" class="edit-input"
+            aria-label="Edit contact phone" />
           <div class="edit-buttons">
             <button @click="saveChanges">Save</button>
             <button @click="isEditing = false">Cancel</button>
@@ -24,11 +25,16 @@
 
         <!-- Action Buttons -->
         <div class="contact-actions">
-          <button v-if="contact.status === 'pending'" @click="handleResend" aria-label="Resend contact" class="action-button resend">
-            🔄
+          <button v-if="contact.status === 'pending'" @click="handleResend" aria-label="Resend contact"
+            class="action-button resend">
+            <font-awesome-icon icon="sync" />
           </button>
-          <button v-else @click="isEditing = true" aria-label="Edit contact" class="action-button edit">✏️</button>
-          <button v-if="!isEditing" @click="showDelete = true" aria-label="Delete contact" class="action-button delete">🗑️</button>
+          <button v-else-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
+            <font-awesome-icon icon="edit" />
+          </button>
+          <button v-if="!isEditing" @click="showDelete = true" aria-label="Delete contact" class="action-button delete">
+            <font-awesome-icon icon="trash" />
+          </button>
         </div>
       </div>
     </div>
@@ -49,10 +55,12 @@
 <script>
 import { ref } from 'vue';
 import { useContactStore } from '../stores/contacts';
+import { useRouter } from 'vue-router';
 
 export default {
   props: ['contact'],
   setup(props) {
+    const router = useRouter();
     const contactStore = useContactStore();
     const isEditing = ref(false);
     const showDelete = ref(false);
@@ -61,8 +69,14 @@ export default {
     const saveChanges = async () => {
       if (!form.value.name.trim() || !form.value.phone.trim()) return;
       // Changed editContact to updateContact to match the store method
-      await contactStore.updateContact(props.contact.id, { ...form.value });
-      isEditing.value = false;
+      try {
+        const updatedContact = await contactStore.updateContact(props.contact.id, { ...form.value });
+        isEditing.value = false;
+        // Emit event to parent with updated contact data
+        emit('contact-updated', updatedContact);
+      } catch (err) {
+        console.error('Failed to update contact:', err);
+      }
     };
 
     const deleteContact = async () => {
@@ -77,6 +91,12 @@ export default {
       contactStore.fetchContacts();
     };
 
+    const handleAvatarClick = () => {
+      if (props.contact && props.contact.id) {
+        router.push(`/avatar/${props.contact.id}`);
+      }
+    };
+
     return {
       isEditing,
       showDelete,
@@ -84,51 +104,9 @@ export default {
       saveChanges,
       deleteContact,
       handleResend,
-      onAvatarUpdate: (id) => contactStore.updateAvatar(id, props.contact.photo)
+      onAvatarUpdate: (id) => contactStore.updateAvatar(id, props.contact.photo),
+      handleAvatarClick
     };
   }
 };
 </script>
-
-<style scoped>
-.contact-card {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid #ddd;
-  padding: 10px;
-  border-radius: 5px;
-  background-color: white;
-}
-.card-content {
-  display: flex;
-  align-items: center;
-}
-.avatar img {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-}
-.contact-details {
-  flex-grow: 1;
-  margin-left: 10px;
-}
-.action-button {
-  margin-left: 5px;
-}
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.confirm-dialog {
-  background: white;
-  padding: 20px;
-  border-radius: 5px;
-}
-</style>

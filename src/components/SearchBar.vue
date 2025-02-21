@@ -14,9 +14,9 @@
       <FontAwesomeIcon :icon="faSearch" class="search-icon" />
       <input
         type="text"
-        placeholder="Search contacts..."
+        placeholder="Search by name or phone..."
         :value="search"
-        @input="handleSearchChange"
+        @keyup="handleSearchChange"
         aria-label="Search contacts"
       />
     </div>
@@ -33,7 +33,7 @@
 </template>
 
 <script>
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faSearch, faUserPlus } from '@fortawesome/free-solid-svg-icons';
@@ -52,14 +52,26 @@ export default {
     const contactStore = useContactStore();
     const sortOrder = computed(() => contactStore.sortOrder);
     const search = computed(() => props.value);
-
+    const searchTimeout = ref(null);
+    
     const handleSortClick = () => {
       const newSortOrder = sortOrder.value === 'asc' ? 'desc' : 'asc';
       contactStore.setSortOrder(newSortOrder);
     };
 
     const handleSearchChange = (event) => {
-      emit('update:value', event.target.value);
+      const value = event.target.value;
+      emit('update:value', value);
+      
+      // Clear existing timeout
+      if (searchTimeout.value) {
+        clearTimeout(searchTimeout.value);
+      }
+      
+      // Debounce search
+      searchTimeout.value = setTimeout(() => {
+        contactStore.setSearchTerm(value);
+      }, 300);
     };
 
     return {

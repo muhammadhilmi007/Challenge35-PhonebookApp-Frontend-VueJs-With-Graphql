@@ -1,182 +1,226 @@
 <template>
-    <div class="avatar-upload-page">
-      <div class="avatar-upload-container">
-        <!-- Header -->
-        <div class="avatar-upload-header">
-          <h3>Update Profile Photo</h3>
-          <button class="close-button" @click="$router.push('/')" aria-label="Close upload dialog">&times;</button>
+  <div class="avatar-upload-page">
+    <div class="avatar-upload-container">
+      <!-- Header -->
+      <div class="avatar-upload-header">
+        <h3>Update Profile Photo</h3>
+        <button class="close-button" @click="$router.push('/')" aria-label="Close upload dialog">&times;</button>
+      </div>
+
+      <div class="upload-options">
+        <button @click="startCamera" class="upload-option" v-if="isMobile">
+          <span>Take Photo</span>
+        </button>
+      </div>
+
+      <!-- Camera View -->
+      <div v-if="showCamera" class="camera-container">
+        <video ref="video" autoplay playsinline></video>
+        <button @click="capturePhoto" class="camera-button">Take Photo</button>
+        <button @click="stopCamera" class="camera-button cancel">Cancel</button>
+      </div>
+
+      <!-- Upload Area -->
+      <div class="upload-area" :class="{ 'drag-over': isDragging }" @dragover.prevent="isDragging = true"
+        @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop" role="region"
+        aria-label="Avatar upload area">
+        <div v-if="preview" class="preview-container">
+          <img :src="preview" alt="Avatar preview" class="avatar-preview" />
+          <button class="change-image" @click="selectFile">Change Image</button>
         </div>
-        
-        <!-- Upload Area -->
-        <div
-          class="upload-area"
-          :class="{ 'drag-over': isDragging }"
-          @dragover.prevent="isDragging = true"
-          @dragleave.prevent="isDragging = false"
-          @drop.prevent="handleDrop"
-          role="region"
-          aria-label="Avatar upload area"
-        >
-          <div v-if="preview" class="preview-container">
-            <img :src="preview" alt="Avatar preview" class="avatar-preview" />
-            <button class="change-image" @click="selectFile">Change Image</button>
-          </div>
-          <div v-else class="upload-placeholder">
-            <img :src="avatar || '/user-avatar.svg'" alt="Current avatar" class="current-avatar" />
-            <p>Drag & drop an image here or</p>
-            <button @click="selectFile">Select a File</button>
-          </div>
-        </div>
-        
-        <!-- Hidden File Input -->
-        <input ref="fileInput" type="file" @change="handleFileChange" accept="image/jpeg, image/png, image/gif" hidden />
-        
-        <!-- Error Message -->
-        <p v-if="error" class="error-message" role="alert">{{ error }}</p>
-        
-        <!-- Action Buttons -->
-        <div class="upload-actions">
-          <button class="upload-button" @click="uploadAvatar" :disabled="!preview || uploading">{{ uploading ? "Uploading..." : "Upload Avatar" }}</button>
-          <button class="cancel-button" @click="$router.push('/')" :disabled="uploading">Cancel</button>
+        <div v-else class="upload-placeholder">
+          <img :src="avatar || '/default-avatar.svg'" alt="Current avatar" class="current-avatar" />
+          <p>Drag & drop an image here or</p>
+          <button @click="selectFile" class="select-file-button">Select a File</button>
         </div>
       </div>
+
+      <!-- Hidden File Input -->
+      <input ref="fileInput" type="file" @change="handleFileChange" accept="image/jpeg, image/png, image/gif"
+        capture="environment" hidden />
+
+      <!-- Error Message -->
+      <p v-if="error" class="error-message" role="alert">{{ error }}</p>
+
+      <!-- Action Buttons -->
+      <div class="upload-actions">
+        <button class="upload-button" @click="uploadAvatar" :disabled="!preview || uploading">
+          {{ uploading ? "Uploading..." : "Upload Avatar" }}
+        </button>
+        <button class="cancel-button" @click="$router.push('/')" :disabled="uploading">Cancel</button>
+      </div>
     </div>
-  </template>
-  
-  <script>
-  import { ref, onMounted } from 'vue';
-  import { useContactStore } from '../stores/contacts';
-  import { useRoute, useRouter } from 'vue-router';
-  
-  export default {
-    setup() {
-      const route = useRoute();
-      const router = useRouter();
-      const contactStore = useContactStore();
-      const fileInput = ref(null);
-      const preview = ref(null);
-      const avatar = ref(null);
-      const uploading = ref(false);
-      const error = ref("");
-      const isDragging = ref(false);
-      const MAX_FILE_SIZE = 5 * 1024 * 1024;
-      const ACCEPTED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+  </div>
+</template>
+
+<script>
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { useContactStore } from '../stores/contacts';
+import { useRoute, useRouter } from 'vue-router';
+
+export default {
+  setup() {
+    const route = useRoute();
+    const router = useRouter();
+    const contactStore = useContactStore();
+    const fileInput = ref(null);
+    const preview = ref(null);
+    const avatar = ref(null);
+    const uploading = ref(false);
+    const error = ref("");
+    const isDragging = ref(false);
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    const ACCEPTED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
+    const video = ref(null);
+    const showCamera = ref(false);
+    const isMobile = ref(/Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent));
+
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' } 
+        });
+        if (video.value) {
+          video.value.srcObject = stream;
+          showCamera.value = true;
+        }
+      } catch (err) {
+        error.value = "Could not access camera";
+        console.error('Camera error:', err);
+      }
+    };
+
+    const stopCamera = () => {
+      if (video.value?.srcObject) {
+        const tracks = video.value.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        video.value.srcObject = null;
+      }
+      showCamera.value = false;
+    };
+
+    const capturePhoto = () => {
+      if (!video.value) return;
       
-      onMounted(async () => {
-        try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.value.videoWidth;
+      canvas.height = video.value.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video.value, 0, 0);
+        preview.value = canvas.toDataURL('image/jpeg', 0.8);
+        stopCamera();
+      }
+    };
+
+    onBeforeUnmount(() => {
+      stopCamera();
+    });
+
+    onMounted(async () => {
+      try {
+        if (route.params.id) {
           const contact = await contactStore.getContactById(route.params.id);
           avatar.value = contact?.photo;
-        } catch {
-          error.value = "Failed to fetch contact information";
         }
-      });
-      
-      const selectFile = () => fileInput.value.click();
-      
-      const handleFileChange = (event) => {
-        validateAndPreviewFile(event.target.files[0]);
+      } catch (err) {
+        error.value = "Failed to fetch contact information";
+        console.error('Fetch error:', err);
+      }
+    });
+
+    const selectFile = () => {
+      if (fileInput.value) {
+        fileInput.value.click();
+      }
+    };
+
+    const handleFileChange = (event) => {
+      const file = event.target.files?.[0];
+      if (file) {
+        validateAndPreviewFile(file);
+      }
+    };
+
+    const handleDrop = (event) => {
+      isDragging.value = false;
+      const file = event.dataTransfer.files[0];
+      if (file) {
+        validateAndPreviewFile(file);
+      }
+    };
+
+    const validateAndPreviewFile = (file) => {
+      if (!file) {
+        error.value = "No file selected";
+        return;
+      }
+
+      if (!ACCEPTED_FILE_TYPES.includes(file.type)) {
+        error.value = "Only images (JPEG, PNG, GIF) are allowed";
+        return;
+      }
+
+      if (file.size > MAX_FILE_SIZE) {
+        error.value = "Image size must not exceed 5 MB";
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        preview.value = reader.result;
+        error.value = "";
       };
-      
-      const handleDrop = (event) => {
-        isDragging.value = false;
-        validateAndPreviewFile(event.dataTransfer.files[0]);
+      reader.onerror = () => {
+        error.value = "Failed to read file";
       };
-      
-      const validateAndPreviewFile = (file) => {
-        if (!file || !ACCEPTED_FILE_TYPES.includes(file.type)) {
-          error.value = "Only images (JPEG, PNG, GIF) are allowed";
-          return;
-        }
-        if (file.size > MAX_FILE_SIZE) {
-          error.value = "Image size must not exceed 5 MB";
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => {
-          preview.value = reader.result;
-          error.value = "";
-        };
-        reader.readAsDataURL(file);
-      };
-      
-      const uploadAvatar = async () => {
-        if (!preview.value) return;
-        try {
-          uploading.value = true;
-          error.value = "";
-          const response = await fetch(preview.value);
-          const blob = await response.blob();
-          const file = new File([blob], "avatar.jpg", { type: "image/jpeg" });
-          const formData = new FormData();
-          formData.append("photo", file);
-          await contactStore.updateAvatar(route.params.id, formData);
-          router.push("/");
-        } catch {
-          error.value = "Failed to upload avatar";
-        } finally {
-          uploading.value = false;
-        }
-      };
-      
-      return { preview, avatar, uploading, error, isDragging, selectFile, handleFileChange, handleDrop, uploadAvatar };
-    }
-  };
-  </script>
-  
-  <style scoped>
-  .avatar-upload-page {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      background-color: rgba(0, 0, 0, 0.5);
+      reader.readAsDataURL(file);
+    };
+
+    const uploadAvatar = async () => {
+      if (!preview.value) return;
+
+      try {
+        uploading.value = true;
+        error.value = "";
+
+        // Convert base64 to blob
+        const response = await fetch(preview.value);
+        const blob = await response.blob();
+        
+        // Create FormData
+        const formData = new FormData();
+        formData.append("photo", blob, "avatar.jpg");
+
+        // Upload avatar
+        await contactStore.updateAvatar(route.params.id, formData);
+        router.push("/");
+      } catch (err) {
+        error.value = "Failed to upload avatar";
+        console.error('Upload error:', err);
+      } finally {
+        uploading.value = false;
+      }
+    };
+    return {
+      preview,
+      avatar,
+      uploading,
+      error,
+      isDragging,
+      fileInput,
+      selectFile,
+      handleFileChange,
+      handleDrop,
+      uploadAvatar,
+      video,
+      showCamera,
+      isMobile,
+      startCamera,
+      stopCamera,
+      capturePhoto
+    };
   }
-  .avatar-upload-container {
-      padding: 20px;
-      background: white;
-      border-radius: 5px;
-      width: 100%;
-      max-width: 500px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  }
-  .avatar-upload-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-  }
-  .upload-area {
-    padding: 20px;
-    border: 2px dashed #ccc;
-    text-align: center;
-  }
-  .drag-over {
-    border-color: green;
-  }
-  .avatar-preview {
-    max-width: 100px;
-    border-radius: 50%;
-  }
-  .error-message {
-    color: red;
-    font-size: 14px;
-  }
-  .upload-actions {
-    display: flex;
-    gap: 10px;
-  }
-  .upload-button, .cancel-button {
-    padding: 8px 12px;
-    border: none;
-    cursor: pointer;
-  }
-  .upload-button {
-    background: blue;
-    color: white;
-  }
-  .cancel-button {
-    background: gray;
-    color: white;
-  }
-  </style>
-  
+};
+</script>
+

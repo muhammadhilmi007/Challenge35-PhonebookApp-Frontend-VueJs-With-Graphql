@@ -1,7 +1,21 @@
+@import './base.css';
 .app {
     max-width: auto;
     margin: 0 auto;
     padding: 20px;
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
   }
   
   /* Add View Styles */
@@ -254,6 +268,11 @@
     object-fit: cover;
     border: 4px solid #b8860b;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  .observer-target {
+    height: 20px;
+    margin: 20px 0;
   }
   
   .upload-placeholder {
@@ -608,6 +627,14 @@
       font-size: 14px;
     }
   }
+
+  .loading-more {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    margin-top: 20px;
+  }
   
   /* Responsive adjustments */
   @media (max-width: 600px) {
@@ -642,7 +669,7 @@
     width: 30px;
     height: 30px;
     border: 3px solid #f3f3f3;
-    border-top: 3px solid #3498db;
+    border-top: 3px solid #b8860b;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 10px;
