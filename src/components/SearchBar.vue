@@ -51,10 +51,33 @@ export default {
   emits: ['update:value', 'add'],
   setup(props, { emit }) {
     const contactStore = useContactStore();
-    // Use shallowRef for better performance
     const sortOrder = shallowRef(contactStore.sortOrder);
     const searchTimeout = shallowRef(null);
     const searchValue = shallowRef(contactStore.search || '');
+
+    const handleSortClick = () => {
+      const newSortOrder = sortOrder.value === 'asc' ? 'desc' : 'asc';
+      sortOrder.value = newSortOrder;
+      contactStore.setSort('name', newSortOrder);
+    };
+
+    const debouncedSearchHandler = (event) => {
+      const value = event.target.value;
+      emit('update:value', value);
+      
+      if (searchTimeout.value) {
+        clearTimeout(searchTimeout.value);
+      }
+      
+      searchTimeout.value = setTimeout(() => {
+        contactStore.setSearch(value);
+      }, 1000);
+    };
+
+    // Update sort order when it changes in store
+    watch(() => contactStore.sortOrder, (newOrder) => {
+      sortOrder.value = newOrder;
+    }, { immediate: true });
 
     // Static icons object for better memory usage
     const icons = {
@@ -79,25 +102,6 @@ export default {
       searchValue.value = contactStore.search;
       emit('update:value', contactStore.search);
     });
-    
-    const handleSortClick = () => {
-      const newSortOrder = sortOrder.value === 'asc' ? 'desc' : 'asc';
-      contactStore.setSort(contactStore.sortBy, newSortOrder);
-    };
-
-    // Optimized debounced search handler
-    const debouncedSearchHandler = (event) => {
-      const value = event.target.value;
-      emit('update:value', value);
-      
-      if (searchTimeout.value) {
-        clearTimeout(searchTimeout.value);
-      }
-      
-      searchTimeout.value = setTimeout(() => {
-        contactStore.setSearchTerm(value);
-      }, 300); // Reduced debounce time for better responsiveness
-    };
 
     // Cleanup on unmount
     onBeforeUnmount(() => {

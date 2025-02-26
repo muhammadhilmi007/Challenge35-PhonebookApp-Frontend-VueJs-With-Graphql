@@ -25,9 +25,13 @@
 
         <!-- Action Buttons -->
         <div class="contact-actions">
-          <button v-if="contact.status === 'pending'" @click="handleResend" aria-label="Resend contact"
-            class="action-button resend">
-            <font-awesome-icon icon="sync" />
+          <button 
+            v-if="contact.status === 'pending'"
+            @click="handleResend" 
+            class="resend-button"
+            :disabled="resending">
+            <font-awesome-icon :icon="resending ? 'spinner' : 'sync'" :spin="resending" />
+            {{ resending ? 'Resending...' : 'Resend' }}
           </button>
           <button v-else-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
             <font-awesome-icon icon="edit" />
@@ -56,8 +60,12 @@
 import { ref } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import { useRouter } from 'vue-router';
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 
 export default {
+  components: {
+    FontAwesomeIcon
+  },
   props: ['contact'],
   emits: ['contact-updated'],
   setup(props, { emit }) {
@@ -66,6 +74,7 @@ export default {
     const isEditing = ref(false);
     const showDelete = ref(false);
     const form = ref({ name: props.contact.name, phone: props.contact.phone });
+    const resending = ref(false);
 
     const saveChanges = async () => {
       if (!form.value.name.trim() || !form.value.phone.trim()) return;
@@ -86,10 +95,22 @@ export default {
     };
 
     const handleResend = async () => {
+      if (resending.value) return;
+      
+      resending.value = true;
       try {
+        if (!navigator.onLine) {
+          throw new Error("No internet connection. Please check your connection and try again.");
+        }
+
         await contactStore.resendContact(props.contact.id);
+        await contactStore.resetAndFetchContacts();
+        
       } catch (error) {
-        alert(error.message);
+        console.error('Resend failed:', error);
+        alert(error.message || "Failed to resend contact. Please try again.");
+      } finally {
+        resending.value = false;
       }
     };
 
@@ -106,9 +127,29 @@ export default {
       saveChanges,
       deleteContact,
       handleResend,
+      resending,
       onAvatarUpdate: (id) => contactStore.updateAvatar(id, props.contact.photo),
       handleAvatarClick
     };
   }
 };
 </script>
+
+<style scoped>
+.resend-button {
+  background-color: #ffc107;
+  color: #000;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.resend-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+</style>

@@ -7,7 +7,7 @@
     <!-- Contact Cards -->
     <div 
       v-for="(contact, index) in contacts" 
-      :key="contact.id"
+      :key="`${contact.id}-${contact.status || 'regular'}`"
       :class="['contact-list-item', { pending: contact.status === 'pending' }]"
       :ref="(el) => setLastContactRef(el, index)"
     >

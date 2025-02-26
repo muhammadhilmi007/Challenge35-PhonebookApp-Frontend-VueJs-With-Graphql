@@ -27,9 +27,27 @@ export default {
       };
       
       try {
-        await contactStore.addPendingContact(newContact);
-        await contactStore.fetchContacts();
-        navigateBack();
+        // Simplified logic - directly use addContactOffline when offline
+        if (!navigator.onLine) {
+          await contactStore.addContactOffline(newContact);
+          await contactStore.resetAndFetchContacts();
+          navigateBack();
+          return;
+        }
+
+        try {
+          await contactStore.addContact(newContact);
+          await contactStore.resetAndFetchContacts();
+          navigateBack();
+        } catch (err) {
+          if (!navigator.onLine || err.message.includes('ECONNREFUSED')) {
+            await contactStore.addContactOffline(newContact);
+            await contactStore.resetAndFetchContacts();
+            navigateBack();
+          } else {
+            throw err;
+          }
+        }
       } catch (err) {
         error.value = "Failed to save contact";
         console.error('Failed to save contact:', err);
