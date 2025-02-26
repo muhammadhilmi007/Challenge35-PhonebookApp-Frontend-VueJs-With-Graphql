@@ -31,14 +31,15 @@
             class="resend-button"
             :disabled="resending">
             <font-awesome-icon :icon="resending ? 'spinner' : 'sync'" :spin="resending" />
-            {{ resending ? 'Resending...' : 'Resend' }}
           </button>
-          <button v-else-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
+          <template v-else>
+            <button v-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
             <font-awesome-icon icon="edit" />
           </button>
           <button v-if="!isEditing" @click="showDelete = true" aria-label="Delete contact" class="action-button delete">
             <font-awesome-icon icon="trash" />
           </button>
+          </template>
         </div>
       </div>
     </div>
@@ -137,7 +138,6 @@ export default {
 
 <style scoped>
 .resend-button {
-  background-color: #ffc107;
   color: #000;
   border: none;
   padding: 5px 10px;
