@@ -2,26 +2,26 @@
   <div class="avatar-upload-page">
     <div class="avatar-upload-container">
       <!-- Header -->
-      <div class="avatar-upload-header">
+      <div class="avatar-upload-header" v-memo>
         <h3>Update Profile Photo</h3>
         <button class="close-button" @click="$router.push('/')" aria-label="Close upload dialog">&times;</button>
       </div>
 
-      <div class="upload-options">
-        <button @click="startCamera" class="upload-option" v-if="isMobile">
+      <div v-show="isMobile" class="upload-options">
+        <button @click="startCamera" class="upload-option">
           <span>Take Photo</span>
         </button>
       </div>
 
       <!-- Camera View -->
-      <div v-if="showCamera" class="camera-container">
+      <div v-show="showCamera" class="camera-container">
         <video ref="video" autoplay playsinline></video>
         <button @click="capturePhoto" class="camera-button">Take Photo</button>
         <button @click="stopCamera" class="camera-button cancel">Cancel</button>
       </div>
 
       <!-- Upload Area -->
-      <div class="upload-area" :class="{ 'drag-over': isDragging }" @dragover.prevent="isDragging = true"
+      <div class="upload-area" :class="{ 'drag-over': isDragging }" @dragover.prevent="handleDragOver = true"
         @dragleave.prevent="isDragging = false" @drop.prevent="handleDrop" role="region"
         aria-label="Avatar upload area">
         <div v-if="preview" class="preview-container">

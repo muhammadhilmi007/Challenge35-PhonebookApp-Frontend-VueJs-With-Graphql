@@ -10,14 +10,14 @@ import {
   faSync,
   faUserPlus,
   faSearch,
-  faSortAlphaDown,
+  faSortAlphaDownAlt,
   faSortAlphaUp
 } from '@fortawesome/free-solid-svg-icons'
 
 import App from './App.vue'
 import router from './router'
 
-library.add(faEdit, faTrash, faSync, faUserPlus, faSearch, faSortAlphaDown, faSortAlphaUp)
+library.add(faEdit, faTrash, faSync, faUserPlus, faSearch, faSortAlphaDownAlt, faSortAlphaUp)
 
 const app = createApp(App)
 const pinia = createPinia()

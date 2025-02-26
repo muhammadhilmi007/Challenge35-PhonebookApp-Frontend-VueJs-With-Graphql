@@ -73,6 +73,8 @@ export default {
         const updatedContact = await contactStore.updateContact(props.contact.id, { ...form.value });
         isEditing.value = false;
         emit('contact-updated', updatedContact);
+        // Trigger a refresh of the contact list to ensure proper sorting
+        contactStore.resetAndFetchContacts();
       } catch (err) {
         console.error('Failed to update contact:', err);
       }
@@ -84,10 +86,11 @@ export default {
     };
 
     const handleResend = async () => {
-      if (contactStore.resendContact) {
+      try {
         await contactStore.resendContact(props.contact.id);
+      } catch (error) {
+        alert(error.message);
       }
-      contactStore.fetchContacts();
     };
 
     const handleAvatarClick = () => {

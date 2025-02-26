@@ -38,7 +38,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, shallowRef } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import ContactCard from './ContactCard.vue';
 
@@ -46,28 +46,34 @@ export default {
   components: { ContactCard },
   setup() {
     const contactStore = useContactStore();
-    const lastContactRef = ref(null);
-    const observer = ref(null);
-    const isLoadingMore = ref(false);
+    // Use shallowRef for better performance with large lists
+    const lastContactRef = shallowRef(null);
+    const observer = shallowRef(null);
+    const isLoadingMore = shallowRef(false);
 
+    // Memoized computed properties
     const contacts = computed(() => contactStore.contacts);
     const loading = computed(() => contactStore.loading);
     const hasMore = computed(() => contactStore.hasMore);
 
-    // Modified setLastContactRef with error handling
-    const setLastContactRef = async (el, index) => {
-      try {
-        if (index === contacts.value.length - 1 && el !== lastContactRef.value) {
-          lastContactRef.value = el;
-          await nextTick();
-          setupIntersectionObserver();
+    // Optimized setLastContactRef with debouncing
+    let debounceTimer;
+    const setLastContactRef = (el, index) => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        try {
+          if (index === contacts.value.length - 1 && el !== lastContactRef.value) {
+            lastContactRef.value = el;
+            await nextTick();
+            setupIntersectionObserver();
+          }
+        } catch (error) {
+          console.error('Error setting last contact ref:', error);
         }
-      } catch (error) {
-        console.error('Error setting last contact ref:', error);
-      }
+      }, 100);
     };
 
-    // Optimized intersection observer setup
+    // Optimized intersection observer with better performance options
     const setupIntersectionObserver = () => {
       if (observer.value) {
         observer.value.disconnect();
@@ -87,7 +93,7 @@ export default {
         },
         {
           root: null,
-          rootMargin: '100px',
+          rootMargin: '200px', // Increased for better pre-loading
           threshold: 0.1
         }
       );
@@ -97,28 +103,41 @@ export default {
       }
     };
 
-    // Optimized watch to prevent unnecessary observer resets
+    // Optimized watch with immediate option
     watch([hasMore, loading], ([newHasMore, newLoading], [oldHasMore, oldLoading]) => {
       if (newHasMore && !newLoading && (oldHasMore !== newHasMore || oldLoading !== newLoading)) {
-        nextTick(() => {
-          setupIntersectionObserver();
-        });
+        nextTick(() => setupIntersectionObserver());
       }
-    });
+    }, { immediate: true });
 
-    const handleContactUpdate = (updatedContact) => {
-      contactStore.handleContactUpdate(updatedContact);
+    // Improved error handling for contact updates
+    const handleContactUpdate = async (updatedContact) => {
+      try {
+        await contactStore.handleContactUpdate(updatedContact);
+        await contactStore.resetAndFetchContacts();
+      } catch (error) {
+        console.error('Error handling contact update:', error);
+        // Add user feedback here if needed
+      }
     };
 
-    onMounted(async () => {
-      await contactStore.resetAndFetchContacts();
-      setupIntersectionObserver();
-    });
-
+    // Cleanup on component unmount
     onBeforeUnmount(() => {
       if (observer.value) {
         observer.value.disconnect();
-        observer.value = null;
+      }
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    });
+
+    // Initialize contacts with error handling
+    onMounted(async () => {
+      try {
+        await contactStore.resetAndFetchContacts();
+        setupIntersectionObserver();
+      } catch (error) {
+        console.error('Error initializing contacts:', error);
       }
     });
 
@@ -131,7 +150,7 @@ export default {
       onEdit: contactStore.updateContact,
       onDelete: contactStore.deleteContact,
       onAvatarUpdate: contactStore.updateAvatar,
-      onRefreshContacts: contactStore.fetchContacts,
+      onRefreshContacts: () => contactStore.resetAndFetchContacts(),
       onResendSuccess: contactStore.handleResendSuccess
     };
   }
@@ -142,6 +161,8 @@ export default {
 .contact-list {
   position: relative;
   min-height: 200px;
+  will-change: transform; /* Optimize animations */
+  contain: content; /* Improve rendering performance */
 }
 
 .loading-state {
