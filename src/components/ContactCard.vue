@@ -57,81 +57,61 @@
   </div>
 </template>
 
-<script>
-import { ref } from 'vue';
+<script setup>
+import { ref, computed } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import { useRouter } from 'vue-router';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 
-export default {
-  components: {
-    FontAwesomeIcon
-  },
-  props: ['contact'],
-  emits: ['contact-updated'],
-  setup(props, { emit }) {
-    const router = useRouter();
-    const contactStore = useContactStore();
-    const isEditing = ref(false);
-    const showDelete = ref(false);
-    const form = ref({ name: props.contact.name, phone: props.contact.phone });
-    const resending = ref(false);
+const props = defineProps(['contact']);
+const emit = defineEmits(['contact-updated']);
+const router = useRouter();
+const contactStore = useContactStore();
 
-    const saveChanges = async () => {
-      if (!form.value.name.trim() || !form.value.phone.trim()) return;
-      try {
-        const updatedContact = await contactStore.updateContact(props.contact.id, { ...form.value });
-        isEditing.value = false;
-        emit('contact-updated', updatedContact);
-        // Trigger a refresh of the contact list to ensure proper sorting
-        contactStore.resetAndFetchContacts();
-      } catch (err) {
-        console.error('Failed to update contact:', err);
-      }
-    };
+const isEditing = ref(false);
+const showDelete = ref(false);
+const form = ref({ name: props.contact.name, phone: props.contact.phone });
+const resending = ref(false);
 
-    const deleteContact = async () => {
-      await contactStore.deleteContact(props.contact.id);
-      showDelete.value = false;
-    };
+// Updated to use store actions directly
+const saveChanges = async () => {
+  if (!form.value.name.trim() || !form.value.phone.trim()) return;
+  try {
+    await contactStore.updateContact(props.contact.id, { ...form.value });
+    isEditing.value = false;
+    // Remove emit since we're handling refresh directly
+    await contactStore.resetAndFetchContacts();
+  } catch (err) {
+    console.error('Failed to update contact:', err);
+  }
+};
 
-    const handleResend = async () => {
-      if (resending.value) return;
-      
-      resending.value = true;
-      try {
-        if (!navigator.onLine) {
-          throw new Error("No internet connection. Please check your connection and try again.");
-        }
+const deleteContact = async () => {
+  try {
+    await contactStore.deleteContact(props.contact.id);
+    showDelete.value = false;
+    await contactStore.resetAndFetchContacts();
+  } catch (err) {
+    console.error('Failed to delete contact:', err);
+  }
+};
 
-        await contactStore.resendContact(props.contact.id);
-        await contactStore.resetAndFetchContacts();
-        
-      } catch (error) {
-        console.error('Resend failed:', error);
-        alert(error.message || "Failed to resend contact. Please try again.");
-      } finally {
-        resending.value = false;
-      }
-    };
+const handleResend = async () => {
+  if (resending.value) return;
+  
+  resending.value = true;
+  try {
+    await contactStore.resendPendingContact(props.contact.id);
+  } catch (error) {
+    console.error('Resend failed:', error);
+  } finally {
+    resending.value = false;
+  }
+};
 
-    const handleAvatarClick = () => {
-      if (props.contact && props.contact.id) {
-        router.push(`/avatar/${props.contact.id}`);
-      }
-    };
-
-    return {
-      isEditing,
-      showDelete,
-      form,
-      saveChanges,
-      deleteContact,
-      handleResend,
-      resending,
-      onAvatarUpdate: (id) => contactStore.updateAvatar(id, props.contact.photo),
-      handleAvatarClick
-    };
+const handleAvatarClick = () => {
+  if (props.contact?.id) {
+    router.push(`/avatar/${props.contact.id}`);
   }
 };
 </script>

@@ -1,12 +1,11 @@
 import { defineStore } from "pinia";
 import axios from "axios";
-import { debounce } from "lodash-es"; // Add this import
+import { debounce } from "lodash-es";
 import { useSessionStorage } from '@vueuse/core';
 
 export const useContactStore = defineStore("contacts", {
   state: () => ({
     contacts: [],
-    contactCache: new Map(),
     search: useSessionStorage("contactSearch", ""),
     sortOrder: useSessionStorage("contactSortOrder", "asc"),
     sortBy: useSessionStorage("contactSortBy", "name"),
@@ -20,20 +19,17 @@ export const useContactStore = defineStore("contacts", {
     totalPages: 0,
     pendingContacts: useSessionStorage("pendingContacts", []),
     contactsCache: new Map(),
-    cacheDuration: 5 * 60 * 1000,
-    _sortedContacts: null,
-    _lastSortUpdate: null,
+    cacheDuration: 5 * 60 * 1000, // 5 minutes
   }),
 
   getters: {
     sortedAndFilteredContacts: (state) => {
-      const allContacts = [...state.pendingContacts, ...state.contacts];
-      return state.sortAndFilterContacts(allContacts);
+      return state.sortAndFilterContacts([...state.pendingContacts, ...state.contacts]);
     },
   },
 
   actions: {
-    // Add cache helper methods
+    // ===== Cache Management =====
     getCacheKey(page, limit, sortBy, sortOrder, search) {
       return `${page}-${limit}-${sortBy}-${sortOrder}-${search}`;
     },
@@ -58,73 +54,63 @@ export const useContactStore = defineStore("contacts", {
       return cached.data;
     },
 
-    // Modified fetchContacts with improved caching
+    clearCache() {
+      this.contactsCache.clear();
+    },
+
+    // ===== Session Storage Management =====
+    saveToSessionStorage(key, data) {
+      sessionStorage.setItem(key, JSON.stringify(data));
+    },
+
+    getFromSessionStorage(key, defaultValue = []) {
+      try {
+        const data = sessionStorage.getItem(key);
+        return data ? JSON.parse(data) : defaultValue;
+      } catch (error) {
+        console.error(`Error parsing data from sessionStorage (${key}):`, error);
+        return defaultValue;
+      }
+    },
+
+    savePendingContacts() {
+      this.saveToSessionStorage("pendingContacts", this.pendingContacts);
+    },
+
+    // ===== Network Status Management =====
+    checkConnection() {
+      this.isOffline = !navigator.onLine;
+      return !this.isOffline;
+    },
+
+    setOnlineStatus(status) {
+      this.isOffline = !status;
+      if (status) {
+        this.syncPendingContacts();
+      }
+    },
+
+    // ===== Contact Fetching =====
     async fetchContacts(loadMore = false) {
       if (this.loading) return;
-      this.error = null;
       this.loading = true;
+      this.error = null;
 
       try {
         // Get pending contacts from session storage
-        const pendingContacts = JSON.parse(
-          sessionStorage.getItem('pendingContacts') || '[]'
-        );
-        
-        // Update state with pending contacts
+        const pendingContacts = this.getFromSessionStorage("pendingContacts", []);
         this.pendingContacts = pendingContacts;
 
         if (!navigator.onLine) {
-          const existingContacts = JSON.parse(
-            sessionStorage.getItem("existingContacts") || "[]"
-          );
-          
-          // Merge and sort all contacts
-          const allContacts = [...pendingContacts, ...existingContacts];
-          this.contacts = this.sortAndFilterContacts(allContacts);
-          this.hasMore = false;
-          this.loading = false;
-          this.isOffline = true;
-          return;
-        }
-
-        const page = loadMore ? this.currentPage + 1 : 1;
-        const limit = 10;
-
-        // Clear cache if not loading more
-        if (!loadMore) {
-          this.contactsCache.clear();
-        }
-
-        // Check cache first
-        const cacheKey = this.getCacheKey(
-          page,
-          limit,
-          this.sortBy,
-          this.sortOrder,
-          this.search
-        );
-        const cachedData = this.getCacheData(cacheKey);
-
-        if (cachedData) {
-          const { contacts, pages } = cachedData;
-          this.contacts = loadMore ? [...this.contacts, ...contacts] : contacts;
-          this.hasMore = page < pages;
-          this.currentPage = page;
-          this.totalPages = pages;
+          // In offline mode, use cached data
+          const existingContacts = this.getFromSessionStorage("existingContacts", []);
+          this.contacts = this.sortAndFilterContacts([...pendingContacts, ...existingContacts]);
           this.loading = false;
           return;
         }
 
-        // Get cached data
-        const cachedPendingContacts = JSON.parse(
-          sessionStorage.getItem("pendingContacts") || "[]"
-        );
-        const existingContacts = JSON.parse(
-          sessionStorage.getItem("existingContacts") || "[]"
-        );
-
+        // In online mode, fetch from server
         try {
-          console.log("Fetching Contacts", response);
           const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
             query: `
               query GetContacts($pagination: PaginationInput) {
@@ -146,8 +132,8 @@ export const useContactStore = defineStore("contacts", {
             `,
             variables: {
               pagination: {
-                page,
-                limit,
+                page: this.currentPage,
+                limit: this.pageSize,
                 sortBy: this.sortBy,
                 sortOrder: this.sortOrder,
                 search: this.search,
@@ -155,422 +141,80 @@ export const useContactStore = defineStore("contacts", {
             },
           });
 
-          const { contacts, pages } = response.data.data.contacts;
-
-          // Save to sessionStorage
-          if (!loadMore) {
-            sessionStorage.setItem(
-              "existingContacts",
-              JSON.stringify(contacts)
-            );
-          } else {
-            sessionStorage.setItem(
-              "existingContacts",
-              JSON.stringify([...existingContacts, ...contacts])
-            );
+          if (response.data?.errors) {
+            throw new Error(response.data.errors[0].message);
           }
 
-          // Update state with pending contacts
-          this.pendingContacts = pendingContacts;
-
-          // Merge pending contacts with regular contacts
-          const allContacts = [...new Map([...pendingContacts, ...contacts].map(item => [item.id, item])).values()];
-
+          const { contacts, pages, total } = response.data.data.contacts;
+          
+          // Save to existingContacts in sessionStorage
+          this.saveToSessionStorage("existingContacts", contacts);
+          
           // Update state
-          this.contacts = loadMore ? 
-            [...this.contacts, ...contacts] : 
-            this.sortAndFilterContacts(allContacts);
-
-          this.hasMore = page < pages;
-          this.currentPage = page;
-          this.isOffline = false;
+          this.contacts = loadMore ? [...this.contacts, ...contacts] : contacts;
+          this.hasMore = this.currentPage < pages;
           this.totalPages = pages;
+
         } catch (error) {
-          console.log("Server unavailable, using sessionStorage data");
-
-          const allContacts = [...pendingContacts, ...existingContacts];
-          const sortedContacts = this.sortAndFilterContacts(allContacts);
-
-          if (!loadMore) {
-            // Initial load in offline mode
-            const initialBatch = sortedContacts.slice(0, limit);
-            this.contacts = initialBatch;
-
-            // Store remaining for infinite scroll
-            sessionStorage.setItem(
-              "remainingOfflineContacts",
-              JSON.stringify(sortedContacts.slice(limit))
-            );
-
-            this.hasMore = sortedContacts.length > limit;
-          } else {
-            // Handle infinite scroll in offline mode
-            const remainingContacts = JSON.parse(
-              sessionStorage.getItem("remainingOfflineContacts") || "[]"
-            );
-
-            if (remainingContacts.length > 0) {
-              const nextBatch = remainingContacts.slice(0, limit);
-              const newRemaining = remainingContacts.slice(limit);
-
-              this.contacts = [...this.contacts, ...nextBatch];
-
-              sessionStorage.setItem(
-                "remainingOfflineContacts",
-                JSON.stringify(newRemaining)
-              );
-
-              this.hasMore = newRemaining.length > 0;
-              this.currentPage = page;
-            } else {
-              this.hasMore = false;
-            }
-          }
-
-          this.isOffline = true;
+          console.error("Network error:", error);
+          // If API call fails, use cached data
+          const existingContacts = this.getFromSessionStorage("existingContacts", []);
+          this.contacts = this.sortAndFilterContacts([...pendingContacts, ...existingContacts]);
+          throw error;
         }
       } catch (error) {
-        // If fetch fails, use cached data
-        const pendingContacts = JSON.parse(
-          sessionStorage.getItem('pendingContacts') || '[]'
-        );
-        const existingContacts = JSON.parse(
-          sessionStorage.getItem("existingContacts") || "[]"
-        );
-        
-        // Merge and sort all contacts
-        const allContacts = [...pendingContacts, ...existingContacts];
-        this.contacts = this.sortAndFilterContacts(allContacts);
-        this.isOffline = true;
-        this.hasMore = false;
+        console.error("Fetch error:", error);
+        this.error = error.message;
       } finally {
         this.loading = false;
       }
     },
 
-    setOnlineStatus(status) {
-      this.isOffline = !status;
-      if (status) {
-        this.syncPendingContacts();
-      }
-    },
-
-    clearError() {
-      this.error = null;
-    },
-
-    async syncPendingContacts() {
-      if (this.isOffline || !this.pendingContacts.length) return;
-
-      const BATCH_SIZE = 5;
-      const pendingContacts = [...this.pendingContacts];
-      this.pendingContacts = [];
-
-      // Process in batches
-      for (let i = 0; i < pendingContacts.length; i += BATCH_SIZE) {
-        const batch = pendingContacts.slice(i, i + BATCH_SIZE);
-        await Promise.all(
-          batch.map(async (contact) => {
-            try {
-              if (contact.id.startsWith("pending_")) {
-                await this.addContact(contact);
-              } else {
-                await this.updateContact(contact.id, contact);
-              }
-            } catch (error) {
-              this.pendingContacts.push(contact);
-              console.error("Failed to sync contact:", error);
-            }
-          })
-        );
-      }
-
-      this.savePendingContacts();
-      await this.fetchContacts();
-    },
-    // Offline support methods
-    checkConnection() {
-      this.isOffline = !navigator.onLine;
-      return !this.isOffline;
-    },
-
-    savePendingContacts() {
-      sessionStorage.setItem(
-        "pendingContacts",
-        JSON.stringify(this.pendingContacts)
-      );
-    },
-
-    saveToSessionStorage(contacts) {
-      sessionStorage.setItem("cachedContacts", JSON.stringify(contacts));
-      sessionStorage.setItem("lastFetchTime", Date.now().toString());
-    },
-
-    getFromSessionStorage() {
-      const cached = sessionStorage.getItem("cachedContacts");
-      return cached ? JSON.parse(cached) : null;
-    },
-
-    batchSaveToSessionStorage(items) {
-      const updates = {};
-      for (const [key, value] of Object.entries(items)) {
-        updates[key] = JSON.stringify(value);
-      }
-
-      // Batch all sessionStorage updates
-      Object.entries(updates).forEach(([key, value]) => {
-        sessionStorage.setItem(key, value);
-      });
-    },
-
-    // Use in setSort
-    setSort(field, order) {
-      this.sortBy = field;
-      this.sortOrder = order;
-
-      // Batch sessionStorage updates
-      this.batchSaveToSessionStorage({
-        contactSortBy: field,
-        contactSortOrder: order,
-      });
-
-      this.currentPage = 1;
-      this.fetchContacts();
-    },
-
-    // Search and sort methods
-    setSearchTerm(term) {
-      this.search = term;
-      sessionStorage.setItem("contactSearch", term);
-      sessionStorage.setItem("searchActive", "true");
-      this.currentPage = 1;
-      this.fetchContacts();
-    },
-
-    setSortOrder(order) {
-      this.sortOrder = order;
-      sessionStorage.setItem("contactSortOrder", order);
-      this.currentPage = 1;
-      this.fetchContacts();
-    },
-
-    sortAndFilterContacts(contacts) {
-      let filteredContacts = [...contacts];
-
-      // Apply search filter first
-      if (this.search) {
-        const searchTerm = this.search.toLowerCase();
-        filteredContacts = filteredContacts.filter(
-          (contact) =>
-            contact.name.toLowerCase().includes(searchTerm) ||
-            contact.phone.toLowerCase().includes(searchTerm)
-        );
-      }
-
-      // Then sort the filtered results
-      return filteredContacts.sort((a, b) => {
-        const aValue = (a[this.sortBy] || "").toString().toLowerCase();
-        const bValue = (b[this.sortBy] || "").toString().toLowerCase();
-        const compareResult = aValue.localeCompare(bValue);
-        return this.sortOrder === "asc" ? compareResult : -compareResult;
-      });
-    },
-
-    // Improved search method with debouncing
-    setSearch: debounce(function (value) {
-      this.search = value;
-      if (value) {
-        sessionStorage.setItem("contactSearch", value);
-        sessionStorage.setItem("searchActive", "true");
-      } else {
-        sessionStorage.removeItem("contactSearch");
-        sessionStorage.removeItem("searchActive");
-      }
-
-      // Keep current sort settings while searching
-      if (this.isOffline) {
-        const allContacts = [...this.pendingContacts, ...this.contacts];
-        this.contacts = this.sortAndFilterContacts(allContacts);
-      } else {
-        this.currentPage = 1;
-        this.fetchContacts();
-      }
-    }, 300),
-
-    // Improved sort method with debouncing
-    setSort: debounce(function (field, order) {
-      this.sortBy = field;
-      this.sortOrder = order;
-      sessionStorage.setItem("contactSortBy", field);
-      sessionStorage.setItem("contactSortOrder", order);
-
-      // Apply sorting to current contacts without fetching
-      if (this.isOffline) {
-        this.contacts = this.sortAndFilterContacts(this.contacts);
-      } else {
-        // Only reset page and fetch if online
-        this.currentPage = 1;
-        this.fetchContacts();
-      }
-    }, 300),
-
-    // Modified addContact with offline support
-    async addContact(contactData) {
+    async loadMoreContacts() {
+      if (this.loadingMore || !this.hasMore) return;
+      
       try {
-        // First check connection
-        if (!navigator.onLine) {
-          const pendingContact = {
-            ...contactData,
-            id: `pending_${Date.now()}`,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
+        this.loadingMore = true;
+        const nextPage = this.currentPage + 1;
 
-          // Add to pending contacts in session storage
-          const pendingContacts = JSON.parse(sessionStorage.getItem('pendingContacts') || '[]');
-          pendingContacts.push(pendingContact);
-          sessionStorage.setItem('pendingContacts', JSON.stringify(pendingContacts));
+        // Check cache first
+        const cacheKey = this.getCacheKey(
+          nextPage,
+          this.pageSize,
+          this.sortBy,
+          this.sortOrder,
+          this.search
+        );
+        const cachedData = this.getCacheData(cacheKey);
 
-          // Update state
-          this.pendingContacts = pendingContacts;
-          
-          // Add to current contacts list and sort
-          this.contacts = [...this.contacts, pendingContact];
-          this.contacts = this.sortAndFilterContacts(this.contacts);
-
-          return pendingContact;
+        if (cachedData) {
+          this.contacts = [...this.contacts, ...cachedData.contacts];
+          this.currentPage = nextPage;
+          this.hasMore = nextPage < cachedData.pages;
+          this.totalPages = cachedData.pages;
+          return;
         }
 
-        // Try online save
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: `
-            mutation CreateContact($input: ContactInput!) {
-              createContact(input: $input) {
-                id
-                name
-                phone
-                photo
-                createdAt
-                updatedAt
-              }
-            }
-          `,
-          variables: { input: contactData },
-        });
+        // Set next page before fetching
+        this.currentPage = nextPage;
+        await this.fetchContacts(true);
 
-        return response.data.data.createContact;
       } catch (error) {
-        // If server is unreachable, save offline
-        if (error.message.includes('Network Error') || !navigator.onLine) {
-          return this.addContactOffline(contactData);
-        }
-        throw error;
-      }
-    },
-
-    // Modified resendPendingContact method
-    async resendPendingContact(pendingId) {
-      if (!this.checkConnection()) {
-        throw new Error("No internet connection available");
-      }
-
-      const pendingContact = this.pendingContacts.find(
-        (c) => c.id === pendingId
-      );
-      if (!pendingContact) return;
-
-      try {
-        const { id, status, createdAt, updatedAt, ...contactData } =
-          pendingContact;
-        const savedContact = await this.addContact(contactData);
-
-        // Remove from pending and add to regular contacts
-        this.pendingContacts = this.pendingContacts.filter(
-          (c) => c.id !== pendingId
-        );
-        this.savePendingContacts();
-
-        return savedContact;
-      } catch (error) {
+        console.error("Error loading more contacts:", error);
         this.error = error.message;
-        throw error;
+      } finally {
+        this.loadingMore = false;
       }
-    },
-
-    removeFromCurrentView(contactId) {
-      // Using Set for faster lookup
-      const contactsSet = new Set(this.contacts.map((c) => c.id));
-      contactsSet.delete(contactId);
-      this.contacts = this.contacts.filter((contact) =>
-        contactsSet.has(contact.id)
-      );
-    },
-
-    async updateContact(id, contactData) {
-      try {
-        const mutation = `
-          mutation UpdateContact($id: ID!, $input: ContactInput!) {
-            updateContact(id: $id, input: $input) {
-              id
-              name
-              phone
-              photo
-            }
-          }
-        `;
-
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: mutation,
-          variables: { id, input: contactData },
-        });
-
-        const updatedContact = response.data.data.updateContact;
-
-        // Update local state considering search term
-        const searchTerm = this.search.toLowerCase();
-        if (searchTerm) {
-          const matchesSearch =
-            updatedContact.name.toLowerCase().includes(searchTerm) ||
-            updatedContact.phone.toLowerCase().includes(searchTerm);
-
-          if (!matchesSearch) {
-            this.removeFromCurrentView(id);
-          } else {
-            const index = this.contacts.findIndex((c) => c.id === id);
-            if (index !== -1) {
-              this.contacts[index] = updatedContact;
-            }
-          }
-        } else {
-          const index = this.contacts.findIndex((c) => c.id === id);
-          if (index !== -1) {
-            this.contacts[index] = updatedContact;
-          }
-        }
-
-        return updatedContact;
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      }
-    },
-
-    setSearchTerm(term) {
-      this.search = term;
-      this.currentPage = 1;
-      this.fetchContacts(); // Immediately fetch contacts with new search term
-    },
-
-    setSortOrder(order) {
-      this.sortOrder = order;
-      this.currentPage = 1; // Reset to first page when sorting changes
-      this.fetchContacts(); // This will maintain the current search term
     },
 
     async getContactById(id) {
-      if (this.contactCache.has(id)) {
-        return this.contactCache.get(id);
+      // First check in current contacts and pending contacts
+      const contact = [...this.contacts, ...this.pendingContacts].find(c => c.id === id);
+      if (contact) return contact;
+
+      // Then check in cache
+      if (this.contactsCache.has(`contact-${id}`)) {
+        return this.contactsCache.get(`contact-${id}`).data;
       }
 
       try {
@@ -590,13 +234,14 @@ export const useContactStore = defineStore("contacts", {
           variables: { id },
         });
 
-        if (response.data.errors) {
+        if (response.data?.errors) {
           throw new Error(response.data.errors[0].message);
         }
 
         const contact = response.data.data.contact;
+        
         // Cache the result
-        this.contactCache.set(id, contact);
+        this.setCacheData(`contact-${id}`, contact);
         return contact;
       } catch (error) {
         this.error = error.message;
@@ -604,106 +249,149 @@ export const useContactStore = defineStore("contacts", {
       }
     },
 
-    async fetchContacts() {
-      if (this.loading) return;
-      this.error = null;
-
+    // ===== Sorting and Filtering =====
+    setSearch: debounce(function(value) {
       try {
-        this.loading = true;
+        this.search = value;
+        this.saveToSessionStorage("contactSearch", value);
+        
+        if (this.isOffline) {
+          // Just sort and filter the current contacts
+          const allContacts = [...this.pendingContacts, ...this.getFromSessionStorage("existingContacts", [])];
+          this.contacts = this.sortAndFilterContacts(allContacts);
+        } else {
+          // Reset to first page and fetch with new search
+          this.currentPage = 1;
+          this.fetchContacts();
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        this.error = error.message;
+      }
+    }, 300),
+
+    setSort: debounce(function(field, order) {
+      this.sortBy = field;
+      this.sortOrder = order;
+      sessionStorage.setItem("contactSortBy", field);
+      sessionStorage.setItem("contactSortOrder", order);
+
+      if (this.isOffline) {
+        // Just sort the current contacts
+        this.contacts = this.sortAndFilterContacts(this.contacts);
+      } else {
+        // Reset to first page and fetch with new sort
+        this.currentPage = 1;
+        this.fetchContacts();
+      }
+    }, 300),
+
+    sortAndFilterContacts(contacts) {
+      let filteredContacts = [...contacts];
+
+      // Apply search filter
+      if (this.search) {
+        const searchTerm = this.search.toLowerCase();
+        filteredContacts = filteredContacts.filter(
+          (contact) =>
+            contact.name.toLowerCase().includes(searchTerm) ||
+            contact.phone.toLowerCase().includes(searchTerm)
+        );
+      }
+
+      // Sort the filtered results
+      return filteredContacts.sort((a, b) => {
+        const aValue = (a[this.sortBy] || "").toString().toLowerCase();
+        const bValue = (b[this.sortBy] || "").toString().toLowerCase();
+        const compareResult = aValue.localeCompare(bValue);
+        return this.sortOrder === "asc" ? compareResult : -compareResult;
+      });
+    },
+
+    // ===== Contact Operations =====
+    async addContact(contactData) {
+      try {
+        if (!navigator.onLine) {
+          return this.addContactOffline(contactData);
+        }
+
+        // Only send required fields
+        const { name, phone } = contactData;
+        
         const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
           query: `
-            query GetContacts($pagination: PaginationInput) {
-              contacts(pagination: $pagination) {
-                contacts {
-                  id
-                  name
-                  phone
-                  photo
-                  createdAt
-                  updatedAt
-                }
-                page
-                limit
-                pages
-                total
+            mutation CreateContact($input: ContactInput!) {
+              createContact(input: $input) {
+                id
+                name
+                phone
+                photo
+                createdAt
+                updatedAt
               }
             }
           `,
-          variables: {
-            pagination: {
-              page: this.currentPage,
-              limit: 10,
-              sortBy: this.sortBy,
-              sortOrder: this.sortOrder,
-              search: this.search,
-            },
+          variables: { 
+            input: { name, phone }
           },
         });
 
-        if (response.data.errors) {
-          throw new Error(response.data.errors[0].message);
+        if (response.data?.errors) {
+          throw new Error(response.data.errors[0].message || "Failed to create contact");
         }
-
-        const { contacts, pages } = response.data.data.contacts;
-        this.contacts =
-          this.currentPage === 1 ? contacts : [...this.contacts, ...contacts];
-        this.hasMore = this.currentPage < pages;
-      } catch (error) {
-        this.error = error.message;
-        console.error("Error fetching contacts:", error);
-      } finally {
-        this.loading = false;
-      }
-    },
-
-    // Add this new method
-    async addPendingContact(contactData) {
-      try {
-        if (!navigator.onLine) {
-          return await this.addContactOffline(contactData);
-        }
-
-        const contact = await this.addContact(contactData);
-        return contact;
-      } catch (error) {
-        if (!navigator.onLine || error.message.includes('ECONNREFUSED')) {
-          return await this.addContactOffline(contactData);
-        }
-        throw error;
-      }
-    },
-
-    // Update existing addContact method
-    async addContact(contactData) {
-      try {
-        const mutation = `
-          mutation CreateContact($input: ContactInput!) {
-            createContact(input: $input) {
-              id
-              name
-              phone
-              photo
-              createdAt
-              updatedAt
-            }
-          }
-        `;
-
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: mutation,
-          variables: { input: contactData },
-        });
 
         const newContact = response.data.data.createContact;
+        this.clearCache();
+        this.contacts = this.sortAndFilterContacts([...this.contacts, newContact]);
+        
         return newContact;
       } catch (error) {
+        console.error("Add contact error:", error);
+        
+        if (error.message.includes('Network Error') || !navigator.onLine) {
+          return this.addContactOffline(contactData);
+        }
+        
         this.error = error.message;
         throw error;
+      }
+    },
+
+    async addContactOffline(contactData) {
+      const pendingContact = {
+        ...contactData,
+        id: `pending_${Date.now()}`,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        photo: contactData.photo || null
+      };
+
+      try {
+        // Add to pending contacts
+        this.pendingContacts.push(pendingContact);
+        this.savePendingContacts();
+        
+        // Add to current contacts and resort
+        this.contacts = this.sortAndFilterContacts([...this.contacts, pendingContact]);
+        
+        return pendingContact;
+      } catch (error) {
+        console.error('Error saving contact offline:', error);
+        this.error = "Failed to save contact offline";
+        throw new Error('Failed to save contact offline');
       }
     },
 
     async updateContact(id, contactData) {
       try {
+        // Check for pending contact
+        const isPending = id.startsWith("pending_");
+        
+        if (isPending || !navigator.onLine) {
+          return this.updateContactOffline(id, contactData);
+        }
+
         const mutation = `
           mutation UpdateContact($id: ID!, $input: ContactInput!) {
             updateContact(id: $id, input: $input) {
@@ -722,20 +410,139 @@ export const useContactStore = defineStore("contacts", {
           variables: { id, input: contactData },
         });
 
+        if (response.data?.errors) {
+          throw new Error(response.data.errors[0].message || "Failed to update contact");
+        }
+
         const updatedContact = response.data.data.updateContact;
+        
+        // Update in contacts list
         const index = this.contacts.findIndex((c) => c.id === id);
         if (index !== -1) {
           this.contacts[index] = updatedContact;
         }
+        
+        // Clear caches
+        this.clearCache();
+        this.contactsCache.delete(`contact-${id}`);
+        
         return updatedContact;
       } catch (error) {
+        console.error("Update contact error:", error);
+        
+        // If network error, update offline
+        if (error.message.includes('Network Error') || !navigator.onLine) {
+          return this.updateContactOffline(id, contactData);
+        }
+        
         this.error = error.message;
         throw error;
       }
     },
 
+    updateContactOffline(id, contactData) {
+      try {
+        // Find if it's in pending contacts
+        const pendingIndex = this.pendingContacts.findIndex(c => c.id === id);
+        
+        if (pendingIndex !== -1) {
+          // Update in pending contacts
+          const updatedContact = {
+            ...this.pendingContacts[pendingIndex],
+            ...contactData,
+            updatedAt: new Date().toISOString(),
+            status: 'pending'
+          };
+          
+          this.pendingContacts[pendingIndex] = updatedContact;
+          this.savePendingContacts();
+          
+          // Update in current contacts list
+          const contactIndex = this.contacts.findIndex(c => c.id === id);
+          if (contactIndex !== -1) {
+            this.contacts[contactIndex] = updatedContact;
+          }
+          
+          return updatedContact;
+        } else {
+          // It's a server contact that needs to be added to pending
+          const contact = this.contacts.find(c => c.id === id);
+          
+          if (!contact) {
+            throw new Error("Contact not found");
+          }
+          
+          // Create a pending version with original ID (for sync later)
+          const pendingContact = {
+            ...contact,
+            ...contactData,
+            originalId: id,
+            id: `pending_update_${Date.now()}`,
+            status: 'pending-update',
+            updatedAt: new Date().toISOString()
+          };
+          
+          // Add to pending contacts
+          this.pendingContacts.push(pendingContact);
+          this.savePendingContacts();
+          
+          // Update in current list
+          const contactIndex = this.contacts.findIndex(c => c.id === id);
+          if (contactIndex !== -1) {
+            this.contacts[contactIndex] = {
+              ...contact,
+              ...contactData,
+              status: 'pending-update'
+            };
+          }
+          
+          return pendingContact;
+        }
+      } catch (error) {
+        console.error("Update contact offline error:", error);
+        this.error = "Failed to update contact offline";
+        throw new Error("Failed to update contact offline");
+      }
+    },
+
     async deleteContact(id) {
       try {
+        const isPending = id.startsWith("pending_");
+        
+        if (isPending) {
+          // Remove from pending contacts
+          this.pendingContacts = this.pendingContacts.filter(c => c.id !== id);
+          this.savePendingContacts();
+          
+          // Remove from current contacts list
+          this.contacts = this.contacts.filter(c => c.id !== id);
+          
+          return { id };
+        }
+        
+        if (!navigator.onLine) {
+          // Mark for deletion when back online
+          const contact = this.contacts.find(c => c.id === id);
+          if (contact) {
+            const pendingDelete = {
+              ...contact,
+              originalId: id,
+              id: `pending_delete_${Date.now()}`,
+              status: 'pending-delete'
+            };
+            
+            // Add to pending contacts
+            this.pendingContacts.push(pendingDelete);
+            this.savePendingContacts();
+          }
+          
+          // Remove from current list
+          this.contacts = this.contacts.filter(c => c.id !== id);
+          
+          return { id };
+        }
+
+        // Online delete
         const mutation = `
           mutation DeleteContact($id: ID!) {
             deleteContact(id: $id) {
@@ -744,13 +551,25 @@ export const useContactStore = defineStore("contacts", {
           }
         `;
 
-        await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
+        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
           query: mutation,
           variables: { id },
         });
 
-        this.contacts = this.contacts.filter((c) => c.id !== id);
+        if (response.data?.errors) {
+          throw new Error(response.data.errors[0].message || "Failed to delete contact");
+        }
+
+        // Remove from contacts list
+        this.contacts = this.contacts.filter(c => c.id !== id);
+        
+        // Clear caches
+        this.clearCache();
+        this.contactsCache.delete(`contact-${id}`);
+        
+        return { id };
       } catch (error) {
+        console.error("Delete contact error:", error);
         this.error = error.message;
         throw error;
       }
@@ -765,6 +584,11 @@ export const useContactStore = defineStore("contacts", {
           reader.onloadend = () => resolve(reader.result);
           reader.readAsDataURL(file);
         });
+
+        // For pending contacts or offline mode
+        if (id.startsWith("pending_") || !navigator.onLine) {
+          return this.updateContact(id, { photo: base64String });
+        }
 
         const mutation = `
           mutation UpdateAvatar($id: ID!, $photo: String!) {
@@ -788,516 +612,136 @@ export const useContactStore = defineStore("contacts", {
         });
 
         if (!response.data?.data?.updateAvatar) {
-          console.error("Server response:", response.data);
           throw new Error("Failed to update avatar");
         }
 
         const updatedContact = response.data.data.updateAvatar;
-        const index = this.contacts.findIndex((c) => c.id === id);
+        
+        // Update in contacts list
+        const index = this.contacts.findIndex(c => c.id === id);
         if (index !== -1) {
           this.contacts[index] = updatedContact;
         }
+        
+        // Clear caches
+        this.clearCache();
+        this.contactsCache.delete(`contact-${id}`);
+        
         return updatedContact;
       } catch (error) {
         console.error("Update avatar error:", error);
+        
+        // If network error, update offline
+        if (error.message.includes('Network Error') || !navigator.onLine) {
+          return this.updateContactOffline(id, { photo: base64String });
+        }
+        
         this.error = error.message;
         throw error;
       }
     },
 
-    async loadMoreContacts() {
-      if (this.loadingMore || !this.hasMore) return;
+    // ===== Sync Operations =====
+    async syncPendingContacts() {
+      if (this.isOffline || !this.pendingContacts.length) return;
+
+      const BATCH_SIZE = 5;
+      const pendingContacts = [...this.pendingContacts];
+      const syncedIds = [];
+
+      // Process in batches
+      for (let i = 0; i < pendingContacts.length; i += BATCH_SIZE) {
+        const batch = pendingContacts.slice(i, i + BATCH_SIZE);
+        await Promise.all(
+          batch.map(async (contact) => {
+            try {
+              if (contact.status === 'pending-delete' && contact.originalId) {
+                // Handle pending deletes
+                await this.deleteContact(contact.originalId);
+                syncedIds.push(contact.id);
+              } else if (contact.status === 'pending-update' && contact.originalId) {
+                // Handle pending updates
+                const { originalId, id, status, ...contactData } = contact;
+                await this.updateContact(originalId, contactData);
+                syncedIds.push(contact.id);
+              } else if (contact.id.startsWith("pending_")) {
+                // Handle new contacts
+                const { id, status, createdAt, updatedAt, originalId, ...contactData } = contact;
+                await this.addContact(contactData);
+                syncedIds.push(contact.id);
+              }
+            } catch (error) {
+              console.error("Failed to sync contact:", error);
+              // Keep in pending if failed
+            }
+          })
+        );
+      }
+
+      // Remove synced contacts from pending
+      this.pendingContacts = this.pendingContacts.filter(c => !syncedIds.includes(c.id));
+      this.savePendingContacts();
+      
+      // Refresh contacts
+      await this.resetAndFetchContacts();
+    },
+
+    async resendPendingContact(pendingId) {
+      if (!this.checkConnection()) {
+        throw new Error("No internet connection available");
+      }
+
+      const pendingContact = this.pendingContacts.find(c => c.id === pendingId);
+      if (!pendingContact) {
+        throw new Error("Pending contact not found");
+      }
 
       try {
-        this.loadingMore = true;
-        const nextPage = this.currentPage + 1;
-
-        // Check cache first
-        const cacheKey = this.getCacheKey(
-          nextPage,
-          this.pageSize,
-          this.sortBy,
-          this.sortOrder,
-          this.search
-        );
-        const cachedData = this.getCacheData(cacheKey);
-
-        if (cachedData) {
-          this.appendContacts(cachedData.contacts);
-          this.updatePagination(nextPage, cachedData.pages);
-          return;
+        let result;
+        
+        if (pendingContact.status === 'pending-delete' && pendingContact.originalId) {
+          result = await this.deleteContact(pendingContact.originalId);
+        } else if (pendingContact.status === 'pending-update' && pendingContact.originalId) {
+          // Remove fields not in ContactInput type
+          const { originalId, id, status, createdAt, updatedAt, photo, ...contactData } = pendingContact;
+          result = await this.updateContact(originalId, contactData);
+        } else {
+          // Handle new contacts - only send name and phone
+          const { name, phone } = pendingContact;
+          result = await this.addContact({ name, phone });
         }
 
-        const response = await this.fetchPageFromServer(nextPage);
-        const { contacts, pages } = response;
-
-        this.appendContacts(contacts);
-        this.updatePagination(nextPage, pages);
-
-        // Cache the results
-        this.setCacheData(cacheKey, { contacts, pages });
+        // Remove from pending contacts
+        this.pendingContacts = this.pendingContacts.filter(c => c.id !== pendingId);
+        this.savePendingContacts();
+        
+        // Refresh contacts
+        await this.resetAndFetchContacts();
+        
+        return result;
       } catch (error) {
-        console.error("Error loading more contacts:", error);
+        console.error("Failed to resend contact:", error);
         this.error = error.message;
-      } finally {
-        this.loadingMore = false;
+        throw error;
       }
     },
 
-    async fetchPageFromServer(page) {
-      const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-        query: `
-          query GetContacts($pagination: PaginationInput) {
-            contacts(pagination: $pagination) {
-              contacts {
-                id
-                name
-                phone
-                photo
-                createdAt
-                updatedAt
-              }
-              page
-              limit
-              pages
-              total
-            }
-          }
-        `,
-        variables: {
-          pagination: {
-            page,
-            limit: this.pageSize,
-            sortBy: this.sortBy,
-            sortOrder: this.sortOrder,
-            search: this.search,
-          },
-        },
-      });
-
-      return response.data.data.contacts;
-    },
-
-    // Add these new methods in the actions object
+    // ===== Reset and Refresh =====
     async resetAndFetchContacts() {
       this.currentPage = 1;
       this.hasMore = true;
-      this.contactsCache.clear();
+      this.clearCache();
       
       // Don't clear existingContacts when offline
       if (navigator.onLine) {
         sessionStorage.removeItem("existingContacts");
       }
       
-      sessionStorage.removeItem("remainingOfflineContacts");
       await this.fetchContacts();
     },
 
-    handleContactUpdate(updatedContact) {
-      const index = this.contacts.findIndex((c) => c.id === updatedContact.id);
-      if (index !== -1) {
-        // Update contact in the current list
-        const index = this.contacts.findIndex(
-          (c) => c.id === updatedContact.id
-        );
-        if (index !== -1) {
-          this.contacts[index] = updatedContact;
-        }
-
-        // Re-sort the contacts based on current sort settings
-        this.contacts = this.sortAndFilterContacts(this.contacts);
-
-        // Clear cache to ensure fresh data on next fetch
-        this.contactsCache.clear();
-        sessionStorage.removeItem("existingContacts");
-      }
-    },
-
-    async updateContact(id, contactData) {
-      try {
-        const mutation = `
-            mutation UpdateContact($id: ID!, $input: ContactInput!) {
-              updateContact(id: $id, input: $input) {
-                id
-                name
-                phone
-                photo
-                createdAt
-                updatedAt
-              }
-            }
-          `;
-
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: mutation,
-          variables: { id, input: contactData },
-        });
-
-        const updatedContact = response.data.data.updateContact;
-
-        // Handle the update and re-sort
-        await this.handleContactUpdate(updatedContact);
-
-        return updatedContact;
-      } catch (error) {
-        this.error = error.message;
-        throw error;
-      }
-    },
-
-    appendContacts(newContacts) {
-      this.contacts = [...this.contacts, ...newContacts];
-    },
-
-    // Helper method to update pagination
-    updatePagination(page, totalPages) {
-      this.currentPage = page;
-      this.hasMore = page < totalPages;
-      this.totalPages = totalPages;
-    },
-
-    setPage(page) {
-      this.currentPage = page;
-      this.fetchContacts();
-    },
-
-    updateSearch(value) {
-      this.search = value;
-    },
-
-    // Add this new method
-    async resendPendingContact(pendingId) {
-      try {
-        if (!this.checkConnection()) {
-          throw new Error("Server is currently offline. Please try again when online.");
-        }
-
-        const pendingContact = this.contacts.find(c => c.id === pendingId);
-        if (!pendingContact) return;
-
-        // Remove status and temporary id for sending to server
-        const { id, status, ...contactData } = pendingContact;
-
-        // Try to create contact on server
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: `
-            mutation CreateContact($input: ContactInput!) {
-              createContact(input: $input) {
-                id
-                name
-                phone
-                photo
-                createdAt
-                updatedAt
-              }
-            }
-          `,
-          variables: { input: contactData },
-        });
-
-        const savedContact = response.data.data.createContact;
-
-        // Remove from session storage
-        const pendingContacts = JSON.parse(sessionStorage.getItem('pendingContacts') || '[]');
-        const updatedPending = pendingContacts.filter(c => c.id !== pendingId);
-        sessionStorage.setItem('pendingContacts', JSON.stringify(updatedPending));
-
-        // Update the contact in the current list
-        const index = this.contacts.findIndex(c => c.id === pendingId);
-        if (index !== -1) {
-          this.contacts[index] = savedContact;
-        }
-
-        // Refresh the list to ensure proper order
-        await this.resetAndFetchContacts();
-
-        return savedContact;
-      } catch (error) {
-        if (!navigator.onLine) {
-          throw new Error("No internet connection. Please check your connection and try again.");
-        }
-        throw error;
-      }
-    },
-
-    async resendContact(pendingId) {
-      try {
-        if (!navigator.onLine) {
-          throw new Error("No internet connection. Please check your connection and try again.");
-        }
-    
-        // Find the pending contact
-        const contact = this.contacts.find(c => c.id === pendingId);
-        if (!contact) return;
-    
-        // Remove pending-specific fields
-        const { id, status, createdAt, updatedAt, ...contactData } = contact;
-    
-        try {
-          // Try to save to server
-          const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-            query: `
-              mutation CreateContact($input: ContactInput!) {
-                createContact(input: $input) {
-                  id
-                  name
-                  phone
-                  photo
-                  createdAt
-                  updatedAt
-                }
-              }
-            `,
-            variables: { input: contactData },
-          });
-    
-          const savedContact = response.data.data.createContact;
-    
-          // Remove from pending contacts in session storage
-          const pendingContacts = JSON.parse(sessionStorage.getItem('pendingContacts') || '[]');
-          const updatedPending = pendingContacts.filter(c => c.id !== pendingId);
-          sessionStorage.setItem('pendingContacts', JSON.stringify(updatedPending));
-    
-          // Update state
-          this.pendingContacts = updatedPending;
-    
-          // Update in current list
-          const index = this.contacts.findIndex(c => c.id === pendingId);
-          if (index !== -1) {
-            this.contacts[index] = savedContact;
-          }
-    
-          // Refresh contacts to ensure proper order
-          await this.resetAndFetchContacts();
-    
-          return savedContact;
-        } catch (error) {
-          if (error.message.includes('Network Error') || !navigator.onLine) {
-            throw new Error("Server is currently unavailable. Please try again later.");
-          }
-          throw error;
-        }
-      } catch (error) {
-        console.error('Resend error:', error);
-        throw new Error(
-          error.message || 
-          (navigator.onLine ? 
-            "Failed to save contact. Please try again." : 
-            "No internet connection. Please check your connection and try again."
-          )
-        );
-      }
-    },
-
-    // Add this method to handle offline saving
-    async addContactOffline(contactData) {
-      const pendingContact = {
-        ...contactData,
-        id: `pending_${Date.now()}`,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        photo: null
-      };
-
-      try {
-        // Get existing pending contacts
-        const pendingContacts = JSON.parse(
-          sessionStorage.getItem('pendingContacts') || '[]'
-        );
-
-        // Add new pending contact
-        pendingContacts.push(pendingContact);
-
-        // Update sessionStorage
-        sessionStorage.setItem('pendingContacts', JSON.stringify(pendingContacts));
-
-        // Update state
-        this.pendingContacts = pendingContacts;
-
-        // Get existing contacts
-        const existingContacts = JSON.parse(
-          sessionStorage.getItem('existingContacts') || '[]'
-        );
-
-        // Update contacts array with both pending and existing
-        const allContacts = [...pendingContacts, ...existingContacts];
-        this.contacts = this.sortAndFilterContacts(allContacts);
-
-        return pendingContact;
-      } catch (error) {
-        console.error('Error saving contact offline:', error);
-        throw new Error('Failed to save contact offline');
-      }
-    },
-
-    // Modified addContact method
-    async addContact(contactData) {
-      try {
-        // First check connection
-        if (!navigator.onLine) {
-          const pendingContact = {
-            ...contactData,
-            id: `pending_${Date.now()}`,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-
-          // Add to pending contacts in session storage
-          const pendingContacts = JSON.parse(sessionStorage.getItem('pendingContacts') || '[]');
-          pendingContacts.push(pendingContact);
-          sessionStorage.setItem('pendingContacts', JSON.stringify(pendingContacts));
-
-          // Update state
-          this.pendingContacts = pendingContacts;
-          
-          // Add to current contacts list and sort
-          this.contacts = [...this.contacts, pendingContact];
-          this.contacts = this.sortAndFilterContacts(this.contacts);
-
-          return pendingContact;
-        }
-
-        // Try online save
-        const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-          query: `
-            mutation CreateContact($input: ContactInput!) {
-              createContact(input: $input) {
-                id
-                name
-                phone
-                photo
-                createdAt
-                updatedAt
-              }
-            }
-          `,
-          variables: { input: contactData },
-        });
-
-        return response.data.data.createContact;
-      } catch (error) {
-        // If server is unreachable, save offline
-        if (error.message.includes('Network Error') || !navigator.onLine) {
-          return this.addContactOffline(contactData);
-        }
-        throw error;
-      }
-    },
-
-    // Modified addPendingContact method
-    async addPendingContact(contactData) {
-      try {
-        let contact;
-        
-        if (!navigator.onLine) {
-          contact = await this.addContactOffline(contactData);
-        } else {
-          try {
-            contact = await this.addContact(contactData);
-          } catch (error) {
-            if (!navigator.onLine || error.message.includes('Network Error')) {
-              contact = await this.addContactOffline(contactData);
-            } else {
-              throw error;
-            }
-          }
-        }
-
-        // Update the contacts list immediately
-        if (contact.status === 'pending') {
-          this.contacts = [...this.contacts, contact];
-          this.contacts = this.sortAndFilterContacts(this.contacts);
-        }
-
-        return contact;
-      } catch (error) {
-        console.error('Failed to add contact:', error);
-        throw error;
-      }
-    },
-
-    async resendContact(pendingId) {
-      try {
-        if (!navigator.onLine) {
-          throw new Error("No internet connection. Please check your connection and try again.");
-        }
-
-        // Find the pending contact
-        const contact = this.contacts.find(c => c.id === pendingId);
-        if (!contact) {
-          throw new Error("Contact not found");
-        }
-
-        // Only include fields that are part of ContactInput type
-        const contactData = {
-          name: contact.name,
-          phone: contact.phone
-        };
-
-        try {
-          const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-            query: `
-              mutation CreateContact($input: ContactInput!) {
-                createContact(input: $input) {
-                  id
-                  name
-                  phone
-                  photo
-                  createdAt
-                  updatedAt
-                }
-              }
-            `,
-            variables: { 
-              input: contactData
-            },
-          });
-
-          // Check for GraphQL errors
-          if (response.data?.errors) {
-            throw new Error(response.data.errors[0]?.message || "GraphQL error occurred");
-          }
-
-          if (!response.data?.data?.createContact) {
-            throw new Error("Failed to create contact");
-          }
-
-          const savedContact = response.data.data.createContact;
-
-          // Update session storage
-          const pendingContacts = JSON.parse(sessionStorage.getItem('pendingContacts') || '[]');
-          const updatedPending = pendingContacts.filter(c => c.id !== pendingId);
-          sessionStorage.setItem('pendingContacts', JSON.stringify(updatedPending));
-
-          // Update state
-          this.pendingContacts = updatedPending;
-
-          // Update contact in list
-          const index = this.contacts.findIndex(c => c.id === pendingId);
-          if (index !== -1) {
-            this.contacts[index] = savedContact;
-          }
-
-          return savedContact;
-
-        } catch (error) {
-          if (error.response?.data?.errors) {
-            throw new Error(error.response.data.errors[0]?.message || "GraphQL error occurred");
-          }
-          throw error;
-        }
-      } catch (error) {
-        console.error('Resend error:', error);
-        throw new Error(
-          error.message || 
-          (navigator.onLine ? 
-            "Failed to save contact. Please try again." : 
-            "No internet connection. Please check your connection and try again."
-          )
-        );
-      }
+    clearError() {
+      this.error = null;
     }
   },
 });

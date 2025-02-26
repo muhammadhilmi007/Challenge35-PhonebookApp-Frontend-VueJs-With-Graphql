@@ -5,25 +5,27 @@
 
   <div v-else class="contact-list">
     <!-- Contact Cards -->
-    <div 
-      v-for="(contact, index) in contacts" 
-      :key="`${contact.id}-${contact.status || 'regular'}`"
-      :class="['contact-list-item', { pending: contact.status === 'pending' }]"
-      :ref="(el) => setLastContactRef(el, index)"
-    >
-      <ContactCard 
-        :contact="contact"
-        @edit="onEdit"
-        @delete="onDelete"
-        @avatar-update="onAvatarUpdate"
-        @resend-success="onResendSuccess"
-        @refresh-contacts="onRefreshContacts"
-        @contact-updated="handleContactUpdate"
-      />
-    </div>
+    <TransitionGroup name="contact-list">
+      <div 
+        v-for="(contact, index) in contacts" 
+        :key="`${contact.id}-${contact.status || 'regular'}`"
+        :class="['contact-list-item', { pending: contact.status === 'pending' }]"
+        :ref="el => index === contacts.length - 1 && setLastContactRef(el)"
+      >
+        <ContactCard 
+          :contact="contact"
+          @edit="onEdit"
+          @delete="onDelete"
+          @avatar-update="onAvatarUpdate"
+          @resend-success="onResendSuccess"
+          @refresh-contacts="onRefreshContacts"
+          @contact-updated="handleContactUpdate"
+        />
+      </div>
+    </TransitionGroup>
 
     <!-- Loading State -->
-    <div v-if="loading" class="loading-state" role="status">
+    <div v-if="loading" class="loading-state" role="status" aria-live="polite">
       <div class="loading-spinner"></div>
       <p>Loading contacts...</p>
     </div>
@@ -33,128 +35,120 @@
       v-if="hasMore && !loading" 
       ref="loadMoreTrigger"
       class="load-more-trigger"
+      aria-hidden="true"
     ></div>
   </div>
 </template>
 
-<script>
+<script setup>
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, shallowRef } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import ContactCard from './ContactCard.vue';
 
-export default {
-  components: { ContactCard },
-  setup() {
-    const contactStore = useContactStore();
-    // Use shallowRef for better performance with large lists
-    const lastContactRef = shallowRef(null);
-    const observer = shallowRef(null);
-    const isLoadingMore = shallowRef(false);
+const contactStore = useContactStore();
+const lastContactRef = shallowRef(null);
+const observer = ref(null);
+const isLoadingMore = ref(false);
+const isObserverSetup = ref(false);
 
-    // Memoized computed properties
-    const contacts = computed(() => contactStore.contacts);
-    const loading = computed(() => contactStore.loading);
-    const hasMore = computed(() => contactStore.hasMore);
+// Memoized computed properties
+const contacts = computed(() => contactStore.contacts);
+const loading = computed(() => contactStore.loading);
+const hasMore = computed(() => contactStore.hasMore);
 
-    // Optimized setLastContactRef with debouncing
-    let debounceTimer;
-    const setLastContactRef = (el, index) => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        try {
-          if (index === contacts.value.length - 1 && el !== lastContactRef.value) {
-            lastContactRef.value = el;
-            await nextTick();
-            setupIntersectionObserver();
-          }
-        } catch (error) {
-          console.error('Error setting last contact ref:', error);
-        }
-      }, 100);
-    };
+// Simplified setLastContactRef - doesn't need debouncing
+const setLastContactRef = (el) => {
+  if (!el || el === lastContactRef.value) return;
+  
+  lastContactRef.value = el;
+  nextTick(() => {
+    if (hasMore.value && !loading.value) {
+      setupIntersectionObserver(el);
+    }
+  });
+};
 
-    // Optimized intersection observer with better performance options
-    const setupIntersectionObserver = () => {
-      if (observer.value) {
-        observer.value.disconnect();
+// Optimized intersection observer
+const setupIntersectionObserver = (el) => {
+  if (observer.value) {
+    observer.value.disconnect();
+  }
+
+  observer.value = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0];
+      if (entry.isIntersecting && hasMore.value && !loading.value && !isLoadingMore.value) {
+        loadMoreContacts();
       }
+    },
+    {
+      root: null,
+      rootMargin: '200px', // Pre-loading margin
+      threshold: 0.1
+    }
+  );
 
-      observer.value = new IntersectionObserver(
-        async (entries) => {
-          const entry = entries[0];
-          if (entry.isIntersecting && hasMore.value && !loading.value && !isLoadingMore.value) {
-            isLoadingMore.value = true;
-            try {
-              await contactStore.loadMoreContacts();
-            } finally {
-              isLoadingMore.value = false;
-            }
-          }
-        },
-        {
-          root: null,
-          rootMargin: '200px', // Increased for better pre-loading
-          threshold: 0.1
-        }
-      );
+  if (el) {
+    observer.value.observe(el);
+  }
+  isObserverSetup.value = true;
+};
 
-      if (lastContactRef.value) {
-        observer.value.observe(lastContactRef.value);
-      }
-    };
-
-    // Optimized watch with immediate option
-    watch([hasMore, loading], ([newHasMore, newLoading], [oldHasMore, oldLoading]) => {
-      if (newHasMore && !newLoading && (oldHasMore !== newHasMore || oldLoading !== newLoading)) {
-        nextTick(() => setupIntersectionObserver());
-      }
-    }, { immediate: true });
-
-    // Improved error handling for contact updates
-    const handleContactUpdate = async (updatedContact) => {
-      try {
-        await contactStore.handleContactUpdate(updatedContact);
-        await contactStore.resetAndFetchContacts();
-      } catch (error) {
-        console.error('Error handling contact update:', error);
-        // Add user feedback here if needed
-      }
-    };
-
-    // Cleanup on component unmount
-    onBeforeUnmount(() => {
-      if (observer.value) {
-        observer.value.disconnect();
-      }
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
-    });
-
-    // Initialize contacts with error handling
-    onMounted(async () => {
-      try {
-        await contactStore.resetAndFetchContacts();
-        setupIntersectionObserver();
-      } catch (error) {
-        console.error('Error initializing contacts:', error);
-      }
-    });
-
-    return {
-      contacts,
-      loading,
-      hasMore,
-      setLastContactRef,
-      handleContactUpdate,
-      onEdit: contactStore.updateContact,
-      onDelete: contactStore.deleteContact,
-      onAvatarUpdate: contactStore.updateAvatar,
-      onRefreshContacts: () => contactStore.resetAndFetchContacts(),
-      onResendSuccess: contactStore.handleResendSuccess
-    };
+// Extract loadMoreContacts logic into a separate function
+const loadMoreContacts = async () => {
+  if (isLoadingMore.value) return;
+  
+  isLoadingMore.value = true;
+  try {
+    await contactStore.loadMoreContacts();
+  } catch (error) {
+    console.error('Error loading more contacts:', error);
+  } finally {
+    isLoadingMore.value = false;
   }
 };
+
+// Remove the handleContactUpdate function and replace with direct contact update handling
+const handleContactUpdate = async (updatedContact) => {
+  try {
+    await contactStore.resetAndFetchContacts();
+  } catch (error) {
+    console.error('Error refreshing contacts:', error);
+  }
+};
+
+// Watch for changes in contacts, hasMore, or loading
+watch([contacts, hasMore, loading], ([newContacts, newHasMore, newLoading]) => {
+  nextTick(() => {
+    if (newHasMore && !newLoading && !isObserverSetup.value && newContacts.length > 0) {
+      setupIntersectionObserver(lastContactRef.value);
+    }
+  });
+});
+
+// Initialize component
+onMounted(async () => {
+  try {
+    await contactStore.resetAndFetchContacts();
+  } catch (error) {
+    console.error('Error initializing contacts:', error);
+  }
+});
+
+// Cleanup resources
+onBeforeUnmount(() => {
+  if (observer.value) {
+    observer.value.disconnect();
+    observer.value = null;
+  }
+});
+
+// Methods exposed to template
+const onEdit = contactStore.updateContact;
+const onDelete = contactStore.deleteContact;
+const onAvatarUpdate = contactStore.updateAvatar;
+const onRefreshContacts = () => contactStore.resetAndFetchContacts();
+const onResendSuccess = contactStore.handleResendSuccess;
 </script>
 
 <style scoped>
@@ -163,6 +157,18 @@ export default {
   min-height: 200px;
   will-change: transform; /* Optimize animations */
   contain: content; /* Improve rendering performance */
+}
+
+/* Animation for contact list items */
+.contact-list-enter-active,
+.contact-list-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.contact-list-enter-from,
+.contact-list-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
 }
 
 .loading-state {

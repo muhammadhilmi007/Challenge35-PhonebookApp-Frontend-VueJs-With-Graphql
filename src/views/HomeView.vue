@@ -24,22 +24,40 @@ export default {
     const search = ref('');
 
     const handleSearchChange = (value) => {
-      search.value = value;
-      contactStore.setSearchTerm(value);
+      try {
+        search.value = value;
+        contactStore.setSearch(value); // Changed from setSearchTerm to setSearch
+      } catch (error) {
+        console.error('Search change error:', error);
+      }
     };
 
     const navigateToAdd = () => {
       router.push('/add');
     };
 
-    // Refresh contacts when component is mounted
-    onMounted(() => {
-      contactStore.resetAndFetchContacts();
+    // Initialize contacts with error handling
+    onMounted(async () => {
+      try {
+        if (navigator.onLine) {
+          // If online, fetch fresh data and save to sessionStorage
+          await contactStore.resetAndFetchContacts();
+        } else {
+          // If offline, load from sessionStorage
+          await contactStore.fetchContacts();
+        }
+      } catch (error) {
+        console.error('Error initializing contacts:', error);
+      }
     });
 
     // Refresh contacts when component is activated (when returning from other routes)
-    onActivated(() => {
-      contactStore.resetAndFetchContacts();
+    onActivated(async () => {
+      try {
+        await contactStore.fetchContacts();
+      } catch (error) {
+        console.error('Error refreshing contacts:', error);
+      }
     });
 
     return {
