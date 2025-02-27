@@ -27,22 +27,21 @@ export default {
       };
       
       try {
-        // Simplified logic - directly use addContactOffline when offline
         if (!navigator.onLine) {
           await contactStore.addContactOffline(newContact);
-          await contactStore.resetAndFetchContacts();
+          await contactStore.fetchContacts();
           navigateBack();
           return;
         }
 
         try {
           await contactStore.addContact(newContact);
-          await contactStore.resetAndFetchContacts();
+          await contactStore.fetchContacts();
           navigateBack();
         } catch (err) {
           if (!navigator.onLine || err.message.includes('ECONNREFUSED')) {
             await contactStore.addContactOffline(newContact);
-            await contactStore.resetAndFetchContacts();
+            // await contactStore.fetchContacts();
             navigateBack();
           } else {
             throw err;

@@ -3,6 +3,9 @@ import axios from "axios";
 import { debounce } from "lodash-es";
 import { useSessionStorage } from '@vueuse/core';
 
+// Add timeout constant
+const NETWORK_TIMEOUT = 5000;
+
 export const useContactStore = defineStore("contacts", {
   state: () => ({
     contacts: [],
@@ -90,30 +93,77 @@ export const useContactStore = defineStore("contacts", {
       }
     },
 
+    // Update checkServerAvailability method with better error handling
+    async checkServerAvailability() {
+      try {
+        await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
+          query: `query { __typename }`
+        }, { 
+          timeout: NETWORK_TIMEOUT,
+          // Add error handling for connection refused
+          validateStatus: (status) => {
+            return status >= 200 && status < 300;
+          }
+        });
+        return true;
+      } catch (error) {
+        console.log("Server check error:", error.message);
+        // Explicitly handle connection refused error
+        if (error.code === 'ERR_CONNECTION_REFUSED') {
+          this.isOffline = true;
+        }
+        return false;
+      }
+    },
+
     // ===== Contact Fetching =====
+    // Update fetchContacts to handle offline mode better
     async fetchContacts(loadMore = false) {
       if (this.loading) return;
       this.loading = true;
       this.error = null;
 
       try {
-        // Get pending contacts from session storage
+        // Get stored data first
         const pendingContacts = this.getFromSessionStorage("pendingContacts", []);
+        const existingContacts = this.getFromSessionStorage("existingContacts", []);
         this.pendingContacts = pendingContacts;
 
-        if (!navigator.onLine) {
-          // In offline mode, use cached data
-          const existingContacts = this.getFromSessionStorage("existingContacts", []);
-          this.contacts = this.sortAndFilterContacts([...pendingContacts, ...existingContacts]);
+        // Check server availability
+        const isServerAvailable = await this.checkServerAvailability();
+        
+        // Handle offline/server unavailable case
+        if (!isServerAvailable || !navigator.onLine) {
+          // Use existing contacts from storage
+          const allContacts = [...existingContacts];
+          const start = (this.currentPage - 1) * this.pageSize;
+          const end = start + this.pageSize;
+          
+          // Combine and sort all contacts
+          const combinedContacts = this.sortAndFilterContacts([...pendingContacts, ...allContacts]);
+          
+          // Update pagination info
+          this.totalPages = Math.ceil(combinedContacts.length / this.pageSize);
+          this.hasMore = this.currentPage < this.totalPages;
+
+          // Update contacts list with proper pagination
+          if (loadMore) {
+            const nextPageContacts = combinedContacts.slice(start, end);
+            this.contacts = [...this.contacts, ...nextPageContacts];
+          } else {
+            this.contacts = combinedContacts.slice(0, end);
+          }
+
           this.loading = false;
           return;
         }
 
-        // In online mode, fetch from server
+        // Online mode
         try {
-          const response = await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
-            query: `
-              query GetContacts($pagination: PaginationInput) {
+          const response = await axios.post(
+            import.meta.env.VITE_GRAPHQL_URL, 
+            {
+              query: `query GetContacts($pagination: PaginationInput) {
                 contacts(pagination: $pagination) {
                   contacts {
                     id
@@ -128,18 +178,19 @@ export const useContactStore = defineStore("contacts", {
                   pages
                   total
                 }
-              }
-            `,
-            variables: {
-              pagination: {
-                page: this.currentPage,
-                limit: this.pageSize,
-                sortBy: this.sortBy,
-                sortOrder: this.sortOrder,
-                search: this.search,
+              }`,
+              variables: {
+                pagination: {
+                  page: this.currentPage,
+                  limit: this.pageSize,
+                  sortBy: this.sortBy,
+                  sortOrder: this.sortOrder,
+                  search: this.search,
+                },
               },
             },
-          });
+            { timeout: NETWORK_TIMEOUT }
+          );
 
           if (response.data?.errors) {
             throw new Error(response.data.errors[0].message);
@@ -147,20 +198,42 @@ export const useContactStore = defineStore("contacts", {
 
           const { contacts, pages, total } = response.data.data.contacts;
           
-          // Save to existingContacts in sessionStorage
-          this.saveToSessionStorage("existingContacts", contacts);
+          // Update existingContacts in sessionStorage
+          const updatedExistingContacts = loadMore 
+            ? [...existingContacts, ...contacts]
+            : contacts;
+          this.saveToSessionStorage("existingContacts", updatedExistingContacts);
           
-          // Update state
-          this.contacts = loadMore ? [...this.contacts, ...contacts] : contacts;
+          // Combine and sort all contacts
+          const allContacts = this.sortAndFilterContacts([...pendingContacts, ...updatedExistingContacts]);
+          
+          // Update state with pagination
+          if (loadMore) {
+            const start = (this.currentPage - 1) * this.pageSize;
+            const end = start + this.pageSize;
+            this.contacts = [...this.contacts, ...allContacts.slice(start, end)];
+          } else {
+            this.contacts = allContacts.slice(0, this.pageSize);
+          }
+          
           this.hasMore = this.currentPage < pages;
           this.totalPages = pages;
 
         } catch (error) {
           console.error("Network error:", error);
-          // If API call fails, use cached data
-          const existingContacts = this.getFromSessionStorage("existingContacts", []);
-          this.contacts = this.sortAndFilterContacts([...pendingContacts, ...existingContacts]);
-          throw error;
+          // Fallback to cached data with pagination
+          const allContacts = this.sortAndFilterContacts([...pendingContacts, ...existingContacts]);
+          const start = (this.currentPage - 1) * this.pageSize;
+          const end = start + this.pageSize;
+          
+          this.totalPages = Math.ceil(allContacts.length / this.pageSize);
+          this.hasMore = this.currentPage < this.totalPages;
+          
+          if (loadMore) {
+            this.contacts = [...this.contacts, ...allContacts.slice(start, end)];
+          } else {
+            this.contacts = allContacts.slice(0, end);
+          }
         }
       } catch (error) {
         console.error("Fetch error:", error);
@@ -175,33 +248,19 @@ export const useContactStore = defineStore("contacts", {
       
       try {
         this.loadingMore = true;
-        const nextPage = this.currentPage + 1;
-
-        // Check cache first
-        const cacheKey = this.getCacheKey(
-          nextPage,
-          this.pageSize,
-          this.sortBy,
-          this.sortOrder,
-          this.search
-        );
-        const cachedData = this.getCacheData(cacheKey);
-
-        if (cachedData) {
-          this.contacts = [...this.contacts, ...cachedData.contacts];
-          this.currentPage = nextPage;
-          this.hasMore = nextPage < cachedData.pages;
-          this.totalPages = cachedData.pages;
-          return;
-        }
-
-        // Set next page before fetching
-        this.currentPage = nextPage;
+        const previousCount = this.contacts.length;
+        this.currentPage += 1;
+        
         await this.fetchContacts(true);
-
+        
+        // Verify if new contacts were actually loaded
+        if (this.contacts.length === previousCount) {
+          this.hasMore = false;
+        }
       } catch (error) {
         console.error("Error loading more contacts:", error);
         this.error = error.message;
+        this.currentPage -= 1;
       } finally {
         this.loadingMore = false;
       }
@@ -368,12 +427,15 @@ export const useContactStore = defineStore("contacts", {
       };
 
       try {
+        // Get existing contacts from sessionStorage
+        const existingContacts = this.getFromSessionStorage("existingContacts", []);
+        
         // Add to pending contacts
         this.pendingContacts.push(pendingContact);
         this.savePendingContacts();
         
-        // Add to current contacts and resort
-        this.contacts = this.sortAndFilterContacts([...this.contacts, pendingContact]);
+        // Update contacts list with both existing and new contact
+        this.contacts = this.sortAndFilterContacts([...existingContacts, ...this.pendingContacts]);
         
         return pendingContact;
       } catch (error) {
@@ -727,13 +789,15 @@ export const useContactStore = defineStore("contacts", {
     },
 
     // ===== Reset and Refresh =====
+    // Update resetAndFetchContacts to handle offline mode
     async resetAndFetchContacts() {
       this.currentPage = 1;
       this.hasMore = true;
       this.clearCache();
       
-      // Don't clear existingContacts when offline
-      if (navigator.onLine) {
+      // Don't clear existingContacts when offline or server unavailable
+      const isServerAvailable = await this.checkServerAvailability();
+      if (navigator.onLine && isServerAvailable) {
         sessionStorage.removeItem("existingContacts");
       }
       
