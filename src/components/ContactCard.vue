@@ -44,7 +44,7 @@
             aria-label="Delete contact"
           >
             <font-awesome-icon :icon="showDeleteConfirm ? 'check' : 'trash'" />
-            <span v-if="showDeleteConfirm" class="delete-confirm-text">Confirm?</span>
+            <span v-if="showDeleteConfirm" class="delete-confirm-text">Hapus?</span>
           </button>
         </template>
       </div>
