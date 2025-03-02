@@ -12,7 +12,8 @@ import {
   faSearch,
   faSortAlphaDownAlt,
   faSortAlphaUp,
-  faSpinner
+  faSpinner,
+  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 
 import App from "./App.vue";
@@ -26,7 +27,8 @@ library.add(
   faSearch,
   faSortAlphaDownAlt,
   faSortAlphaUp,
-  faSpinner
+  faSpinner,
+  faCheck
 );
 
 const app = createApp(App);

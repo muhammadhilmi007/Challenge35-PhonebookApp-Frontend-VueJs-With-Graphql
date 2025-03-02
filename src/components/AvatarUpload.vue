@@ -7,11 +7,11 @@
         <button class="close-button" @click="$router.push('/')" aria-label="Close upload dialog">&times;</button>
       </div>
 
-      <div v-show="isMobile" class="upload-options">
+      <!-- <div v-show="isMobile" class="upload-options">
         <button @click="startCamera" class="upload-option">
           <span>Take Photo</span>
         </button>
-      </div>
+      </div> -->
 
       <!-- Camera View -->
       <div v-show="showCamera" class="camera-container">
@@ -77,8 +77,8 @@ export default {
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'environment' } 
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
         });
         if (video.value) {
           video.value.srcObject = stream;
@@ -101,7 +101,7 @@ export default {
 
     const capturePhoto = () => {
       if (!video.value) return;
-      
+
       const canvas = document.createElement('canvas');
       canvas.width = video.value.videoWidth;
       canvas.height = video.value.videoHeight;
@@ -187,7 +187,7 @@ export default {
         // Convert base64 to blob
         const response = await fetch(preview.value);
         const blob = await response.blob();
-        
+
         // Create FormData
         const formData = new FormData();
         formData.append("photo", blob, "avatar.jpg");
@@ -196,7 +196,7 @@ export default {
         await contactStore.updateAvatar(route.params.id, formData);
         router.push("/");
       } catch (err) {
-        error.value = "Failed to upload avatar";
+        error.value = "Upload failed. Try a smaller image (max 5MB)";
         console.error('Upload error:', err);
       } finally {
         uploading.value = false;
@@ -223,4 +223,3 @@ export default {
   }
 };
 </script>
-

@@ -36,29 +36,25 @@
             <button v-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
             <font-awesome-icon icon="edit" />
           </button>
-          <button v-if="!isEditing" @click="showDelete = true" aria-label="Delete contact" class="action-button delete">
-            <font-awesome-icon icon="trash" />
+          <!-- Modified delete button with inline confirmation -->
+          <button 
+            v-if="!isEditing" 
+            @click="handleDeleteClick" 
+            :class="['action-button', 'delete', { 'confirm-delete': showDeleteConfirm }]"
+            aria-label="Delete contact"
+          >
+            <font-awesome-icon :icon="showDeleteConfirm ? 'check' : 'trash'" />
+            <span v-if="showDeleteConfirm" class="delete-confirm-text">Confirm?</span>
           </button>
-          </template>
-        </div>
+        </template>
       </div>
     </div>
-
-    <!-- Delete Confirmation Modal -->
-    <div v-if="showDelete" class="modal-overlay" role="dialog" aria-modal="true">
-      <div class="confirm-dialog">
-        <p>Are you sure you want to delete this contact?</p>
-        <div class="confirm-buttons">
-          <button @click="deleteContact">Yes</button>
-          <button @click="showDelete = false">No</button>
-        </div>
-      </div>
-    </div>
+  </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, onBeforeUnmount } from 'vue';
 import { useContactStore } from '../stores/contacts';
 import { useRouter } from 'vue-router';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
@@ -69,9 +65,39 @@ const router = useRouter();
 const contactStore = useContactStore();
 
 const isEditing = ref(false);
-const showDelete = ref(false);
 const form = ref({ name: props.contact.name, phone: props.contact.phone });
 const resending = ref(false);
+const showDeleteConfirm = ref(false);
+let deleteTimeout = null;
+
+// Modified delete handling
+const handleDeleteClick = () => {
+  if (showDeleteConfirm.value) {
+    deleteContact();
+  } else {
+    showDeleteConfirm.value = true;
+    // Auto-reset after 3 seconds
+    deleteTimeout = setTimeout(() => {
+      showDeleteConfirm.value = false;
+    }, 3000);
+  }
+};
+
+// Cleanup timeout
+onBeforeUnmount(() => {
+  if (deleteTimeout) {
+    clearTimeout(deleteTimeout);
+  }
+});
+
+const deleteContact = async () => {
+  try {
+    await contactStore.deleteContact(props.contact.id);
+    await contactStore.resetAndFetchContacts();
+  } catch (err) {
+    console.error('Failed to delete contact:', err);
+  }
+};
 
 // Updated to use store actions directly
 const saveChanges = async () => {
@@ -83,16 +109,6 @@ const saveChanges = async () => {
     await contactStore.resetAndFetchContacts();
   } catch (err) {
     console.error('Failed to update contact:', err);
-  }
-};
-
-const deleteContact = async () => {
-  try {
-    await contactStore.deleteContact(props.contact.id);
-    showDelete.value = false;
-    await contactStore.resetAndFetchContacts();
-  } catch (err) {
-    console.error('Failed to delete contact:', err);
   }
 };
 
@@ -117,6 +133,54 @@ const handleAvatarClick = () => {
 </script>
 
 <style scoped>
+/* Add these new styles */
+.action-button.delete {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.action-button.confirm-delete {
+  background-color: #ff4444;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+.delete-confirm-text {
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+/* Update existing contact-actions styles */
+.contact-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.contact-actions button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.contact-actions button:hover {
+  transform: scale(1.05);
+}
+
+.action-button.delete:hover {
+  color: #ff4444;
+}
+
+.action-button.confirm-delete:hover {
+  background-color: #ff2020;
+  color: white;
+}
 .resend-button {
   color: #000;
   border: none;
