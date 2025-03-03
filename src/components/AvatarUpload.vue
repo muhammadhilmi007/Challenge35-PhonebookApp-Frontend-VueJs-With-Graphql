@@ -69,7 +69,7 @@ export default {
     const uploading = ref(false);
     const error = ref("");
     const isDragging = ref(false);
-    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
     const ACCEPTED_FILE_TYPES = ['image/jpeg', 'image/png', 'image/gif'];
     const video = ref(null);
     const showCamera = ref(false);
@@ -162,7 +162,7 @@ export default {
       }
 
       if (file.size > MAX_FILE_SIZE) {
-        error.value = "Image size must not exceed 5 MB";
+        error.value = `Image size must not exceed 5MB (current size: ${(file.size / (1024 * 1024)).toFixed(2)}MB)`;
         return;
       }
 
@@ -188,15 +188,26 @@ export default {
         const response = await fetch(preview.value);
         const blob = await response.blob();
 
+        if (blob.size > MAX_FILE_SIZE) {
+          throw new Error(`Image size must not exceed 5MB (current size: ${(blob.size / (1024 * 1024)).toFixed(2)}MB)`);
+        }
+
         // Create FormData
         const formData = new FormData();
         formData.append("photo", blob, "avatar.jpg");
 
-        // Upload avatar
-        await contactStore.updateAvatar(route.params.id, formData);
-        router.push("/");
+        try {
+          // Upload avatar
+          await contactStore.updateAvatar(route.params.id, formData);
+          router.push("/");
+        } catch (err) {
+          if (err.response?.status === 413) {
+            throw new Error("Image too large. Max size: 5MB");
+          }
+          throw err;
+        }
       } catch (err) {
-        error.value = "Upload failed. Try a smaller image (max 5MB)";
+        error.value = err.message || "Upload failed. Please try a smaller image (max 5MB)";
         console.error('Upload error:', err);
       } finally {
         uploading.value = false;

@@ -23,8 +23,8 @@
           <span v-if="contact.status === 'pending'" class="pending-badge">Pending</span>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="contact-actions">
+        <!-- Action Buttons - Only show when modal is not visible -->
+        <div class="contact-actions" v-show="!showDeleteModal">
           <button 
             v-if="contact.status === 'pending'"
             @click="handleResend" 
@@ -34,22 +34,30 @@
           </button>
           <template v-else>
             <button v-if="!isEditing" @click="isEditing = true" aria-label="Edit contact" class="action-button edit">
-            <font-awesome-icon icon="edit" />
-          </button>
-          <!-- Modified delete button with inline confirmation -->
-          <button 
-            v-if="!isEditing" 
-            @click="handleDeleteClick" 
-            :class="['action-button', 'delete', { 'confirm-delete': showDeleteConfirm }]"
-            aria-label="Delete contact"
-          >
-            <font-awesome-icon :icon="showDeleteConfirm ? 'check' : 'trash'" />
-            <span v-if="showDeleteConfirm" class="delete-confirm-text">Hapus?</span>
-          </button>
-        </template>
+              <font-awesome-icon icon="edit" />
+            </button>
+            <button 
+              v-if="!isEditing" 
+              @click="showDeleteModal = true"
+              class="action-button delete"
+              aria-label="Delete contact">
+              <font-awesome-icon icon="trash" />
+            </button>
+          </template>
+        </div>
+
+        <!-- Inline Delete Confirmation Modal -->
+        <div v-if="showDeleteModal" class="card-modal">
+          <div class="card-modal-content">
+            <p>Delete {{ contact.name }}?</p>
+            <div class="modal-buttons">
+              <button @click="confirmDelete" class="delete-btn">Delete</button>
+              <button @click="showDeleteModal = false" class="cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
   </div>
 </template>
 
@@ -69,6 +77,18 @@ const form = ref({ name: props.contact.name, phone: props.contact.phone });
 const resending = ref(false);
 const showDeleteConfirm = ref(false);
 let deleteTimeout = null;
+
+const showDeleteModal = ref(false);
+
+const confirmDelete = async () => {
+  try {
+    await contactStore.deleteContact(props.contact.id);
+    await contactStore.resetAndFetchContacts();
+    showDeleteModal.value = false;
+  } catch (err) {
+    console.error('Failed to delete contact:', err);
+  }
+};
 
 // Modified delete handling
 const handleDeleteClick = () => {
@@ -156,6 +176,8 @@ const handleAvatarClick = () => {
   display: flex;
   gap: 8px;
   align-items: center;
+  position: relative;
+  z-index: 1;
 }
 
 .contact-actions button {
@@ -195,5 +217,88 @@ const handleAvatarClick = () => {
 .resend-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+
+/* Add new inline modal styles */
+.card-modal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.98); /* Increased opacity for better coverage */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  animation: fadeIn 0.2s ease-out;
+  z-index: 2; /* Ensure modal is above other content */
+}
+
+.card-modal-content {
+  text-align: center;
+  padding: 20px;
+  width: 100%;
+}
+
+.card-modal-content p {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.modal-buttons button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.delete-btn {
+  background: #ff4444;
+  color: white;
+}
+
+.delete-btn:hover {
+  background: #ff2020;
+}
+
+.cancel-btn {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.cancel-btn:hover {
+  background: #e0e0e0;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Make contact card position relative for absolute modal positioning */
+.contact-card {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Adjust existing styles */
+.contact-actions {
+  z-index: 1;
+}
+
+.contact-info {
+  position: relative;
 }
 </style>
