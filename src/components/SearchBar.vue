@@ -34,6 +34,7 @@ import { ref, computed, onMounted, watch, onBeforeUnmount, shallowRef } from 'vu
 import { useContactStore } from '../stores/contacts';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faSearch, faUserPlus, faSortAlphaDown, faSortAlphaUp } from '@fortawesome/free-solid-svg-icons';
+import { debounce } from 'lodash';
 
 const props = defineProps({
   value: {
@@ -62,21 +63,30 @@ const handleSortClick = () => {
   contactStore.setSort('name', newSortOrder);
 };
 
-const debouncedSearchHandler = (event) => {
+const debouncedEmit = debounce((value) => {
+  contactStore.setSearch(value);
+  emit('update:value', value);
+}, 300, { 
+  leading: false, 
+  trailing: true 
+});
+
+const debouncedSearchHandler = () => {
   if (searchTimeout.value) {
     clearTimeout(searchTimeout.value);
+    searchTimeout.value = null;
   }
   
-  searchTimeout.value = setTimeout(() => {
-    contactStore.setSearch(searchValue.value);
-    emit('update:value', searchValue.value);
-  }, 300);
+  // Reset page when searching
+  contactStore.currentPage = 1;
+  debouncedEmit(searchValue.value);
 };
 
 // Watch for external changes to search value
 watch(() => contactStore.search, (newValue) => {
   if (newValue !== searchValue.value) {
     searchValue.value = newValue;
+    contactStore.resetAndFetchContacts();
   }
 });
 
@@ -106,63 +116,3 @@ onBeforeUnmount(() => {
   }
 });
 </script>
-
-<!-- <style scoped>
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  background-color: #f5f5f5;
-  border-radius: 8px;
-  contain: content;
-}
-
-.search-input-container {
-  position: relative;
-  flex-grow: 1;
-}
-
-.search-icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #666;
-  pointer-events: none;
-}
-
-.search-input-container input {
-  width: 100%;
-  padding: 8px 8px 8px 36px;
-  border-radius: 4px;
-  border: 1px solid #ddd;
-  font-size: 14px;
-}
-
-.sort-button, .add-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 4px;
-  background-color: #e0e0e0;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.sort-button:hover, .add-button:hover {
-  background-color: #d0d0d0;
-}
-
-.add-button {
-  background-color: #4caf50;
-  color: white;
-}
-
-.add-button:hover {
-  background-color: #45a049;
-}
-</style> -->

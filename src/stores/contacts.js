@@ -1,10 +1,7 @@
 import { defineStore } from "pinia";
 import axios from "axios";
-import { debounce } from "lodash-es";
+import { debounce } from "lodash";
 import { useSessionStorage } from '@vueuse/core';
-
-// Add timeout constant
-const NETWORK_TIMEOUT = 5000;
 
 export const useContactStore = defineStore("contacts", {
   state: () => ({
@@ -22,7 +19,7 @@ export const useContactStore = defineStore("contacts", {
     totalPages: 0,
     pendingContacts: useSessionStorage("pendingContacts", []),
     contactsCache: new Map(),
-    cacheDuration: 5 * 60 * 1000, // 5 minutes
+    cacheDuration: 1 * 60 * 1000, // 5 minutes
   }),
 
   getters: {
@@ -99,7 +96,6 @@ export const useContactStore = defineStore("contacts", {
         await axios.post(import.meta.env.VITE_GRAPHQL_URL, {
           query: `query { __typename }`
         }, { 
-          timeout: NETWORK_TIMEOUT,
           // Add error handling for connection refused
           validateStatus: (status) => {
             return status >= 200 && status < 300;
@@ -188,8 +184,7 @@ export const useContactStore = defineStore("contacts", {
                   search: this.search,
                 },
               },
-            },
-            { timeout: NETWORK_TIMEOUT }
+            }
           );
 
           if (response.data?.errors) {
@@ -309,25 +304,44 @@ export const useContactStore = defineStore("contacts", {
     },
 
     // ===== Sorting and Filtering =====
-    setSearch: debounce(function(value) {
+    setSearch: debounce(async function(value) {
       try {
+        const previousSearch = this.search;
         this.search = value;
         this.saveToSessionStorage("contactSearch", value);
         
-        if (this.isOffline) {
-          // Just sort and filter the current contacts
-          const allContacts = [...this.pendingContacts, ...this.getFromSessionStorage("existingContacts", [])];
-          this.contacts = this.sortAndFilterContacts(allContacts);
-        } else {
-          // Reset to first page and fetch with new search
+        // Reset pagination when search changes
+        if (previousSearch !== value) {
           this.currentPage = 1;
-          this.fetchContacts();
+          this.hasMore = true;
+          this.contacts = [];
+        }
+
+        if (this.isOffline) {
+          // Handle offline search
+          const allContacts = [...this.pendingContacts, ...this.getFromSessionStorage("existingContacts", [])];
+          const filteredContacts = this.sortAndFilterContacts(allContacts);
+          
+          // Update pagination info
+          this.totalPages = Math.ceil(filteredContacts.length / this.pageSize);
+          this.hasMore = this.currentPage < this.totalPages;
+          
+          // Update displayed contacts with pagination
+          const start = 0;
+          const end = this.currentPage * this.pageSize;
+          this.contacts = filteredContacts.slice(start, end);
+        } else {
+          // Online search
+          await this.fetchContacts();
         }
       } catch (error) {
         console.error('Search error:', error);
         this.error = error.message;
       }
-    }, 300),
+    }, 300, { 
+      leading: false, 
+      trailing: true 
+    }),
 
     setSort: debounce(function(field, order) {
       this.sortBy = field;
@@ -348,14 +362,19 @@ export const useContactStore = defineStore("contacts", {
     sortAndFilterContacts(contacts) {
       let filteredContacts = [...contacts];
 
-      // Apply search filter
+      // Apply search filter with more flexible matching
       if (this.search) {
-        const searchTerm = this.search.toLowerCase();
-        filteredContacts = filteredContacts.filter(
-          (contact) =>
-            contact.name.toLowerCase().includes(searchTerm) ||
-            contact.phone.toLowerCase().includes(searchTerm)
-        );
+        const searchTerms = this.search.toLowerCase().split(' ').filter(term => term.length > 0);
+        
+        filteredContacts = filteredContacts.filter((contact) => {
+          const contactName = contact.name.toLowerCase();
+          const contactPhone = contact.phone.toLowerCase();
+          
+          // Match all search terms
+          return searchTerms.every(term => 
+            contactName.includes(term) || contactPhone.includes(term)
+          );
+        });
       }
 
       // Sort the filtered results
